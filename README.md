@@ -16,6 +16,10 @@ installed. `./install.sh -l` lists what is currently in the repo.
 ```sh
 git clone git@github.com:metrox16/dotfiles.git
 cd dotfiles
+./install.sh          # 1. link configs: nvim, bat (+ eza has none)
+./install-tools.sh    # 2. bat, fd, rg, eza + their aliases + the PATH line
+./install-nvim.sh     # 3. Neovim, vim-plug, plugins, tree-sitter parsers
+
 
 ./install.sh              # install every package
 ./install.sh <package>    # install one package
@@ -31,7 +35,7 @@ A file in a package that belongs to the repo rather than to `$HOME`, such as
 `aliases.sh`, is listed in that package's `.nolink`, one glob per line, and is
 never linked.
 
-## Installing the tools
+### Installing the tools
 
 `install-nvim.sh` sets up Neovim, the plugin manager, the plugins and the
 tree-sitter parsers. `install-tools.sh` sets up the command line tools. Neither
@@ -55,7 +59,7 @@ Adding a tool means adding a row to the table at the top of the script: its
 repository, brew formula and minimum version. Release assets are matched by
 platform, so no per-project file names are hardcoded.
 
-## Tool config and aliases
+### Tool config and aliases
 
 When the repo holds a directory named after a tool, `install-tools.sh` installs
 that too: the config files are linked into `$HOME`, the entries of its
@@ -79,14 +83,14 @@ scripts compare all of them, link the newest into `~/.local/bin` and add a PATH
 line to the same startup file so that version is the one that runs. The line is
 marked and only added once; `--no-path-setup` disables it.
 
-## Shared shell code
+### Shared shell code
 
 `lib/` holds the shared code: `logger.sh` for output and `installer.sh` for
 downloading, version comparison, release lookup, symlinks, shell entries and the
 PATH fix. A directory holding a `.nopackage` file is support code rather than a
 package, so `lib/` is never linked into `$HOME`.
 
-## Adding a package
+### Adding a package
 
 Create the directory, move the real files into it under their `$HOME`-relative
 path, then install:

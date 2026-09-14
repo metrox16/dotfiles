@@ -1,0 +1,9 @@
+#--theme="Monokai Extended Bright"
+#--theme="Visual Studio Dark+"
+#--theme="gruvbox-dark"
+
+--theme="Dracula"
+#--theme="Catppuccin Mocha"
+
+--map-syntax "*.txt:log"
+--map-syntax "*.user:Bourne Again Shell (bash)"

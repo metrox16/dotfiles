@@ -1,0 +1,2 @@
+Marker file: this directory is shared shell code, not a dotfiles package.
+install.sh skips any directory containing a .nopackage file.

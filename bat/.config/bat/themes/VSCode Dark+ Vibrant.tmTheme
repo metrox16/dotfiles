@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>name</key>
+	<string>VSCode Dark+ Vibrant</string>
+	<key>settings</key>
+	<array>
+		<!-- Global settings -->
+		<dict>
+			<key>settings</key>
+			<dict>
+				<key>background</key>
+				<string>#1E1E1E</string>
+				<key>foreground</key>
+				<string>#E8E8E8</string>
+				<key>caret</key>
+				<string>#FFFFFF</string>
+				<key>selection</key>
+				<string>#264F78</string>
+				<key>lineHighlight</key>
+				<string>#2A2D2E</string>
+				<key>gutterForeground</key>
+				<string>#858585</string>
+			</dict>
+		</dict>
+		<!-- Comments: #6A9955 → brighter -->
+		<dict>
+			<key>scope</key>
+			<string>comment, punctuation.definition.comment</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#8FBF6F</string>
+				<key>fontStyle</key>
+				<string>italic</string>
+			</dict>
+		</dict>
+		<!-- Strings: #CE9178 → brighter -->
+		<dict>
+			<key>scope</key>
+			<string>string, string.quoted</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#E8B094</string>
+			</dict>
+		</dict>
+		<!-- ALL keywords, storage, control flow: #C586C0 → brighter purple
+		     (import, def, class, if, else, for, while, return, not, and, or, in, is, continue, break, pass) -->
+		<dict>
+			<key>scope</key>
+			<string>keyword, storage.type, storage.modifier</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#DDA0DD</string>
+			</dict>
+		</dict>
+		<!-- Language constants (None, True, False): #569CD6 → brighter blue -->
+		<dict>
+			<key>scope</key>
+			<string>constant.language</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#79B8F0</string>
+			</dict>
+		</dict>
+		<!-- Functions: #DCDCAA → brighter yellow -->
+		<dict>
+			<key>scope</key>
+			<string>entity.name.function, support.function, meta.function-call</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#F0F0C0</string>
+			</dict>
+		</dict>
+		<!-- Variables: #9CDCFE → brighter -->
+		<dict>
+			<key>scope</key>
+			<string>variable, variable.other, variable.parameter</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#B4E8FF</string>
+			</dict>
+		</dict>
+		<!-- Numeric constants: #B5CEA8 → brighter -->
+		<dict>
+			<key>scope</key>
+			<string>constant.numeric, constant.character</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#CDE8BE</string>
+			</dict>
+		</dict>
+		<!-- Types / Classes: #4EC9B0 → brighter teal -->
+		<dict>
+			<key>scope</key>
+			<string>entity.name.type, entity.name.class, support.type, support.class</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#6EE8D0</string>
+			</dict>
+		</dict>
+		<!-- Punctuation -->
+		<dict>
+			<key>scope</key>
+			<string>punctuation</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#D4D4D4</string>
+			</dict>
+		</dict>
+		<!-- Shell: variable expansion -->
+		<dict>
+			<key>scope</key>
+			<string>variable.other.normal, variable.other.bracket, punctuation.definition.variable</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#B4E8FF</string>
+			</dict>
+		</dict>
+		<!-- Shell: commands / builtins -->
+		<dict>
+			<key>scope</key>
+			<string>support.function.builtin, entity.name.command</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#F0F0C0</string>
+			</dict>
+		</dict>
+		<!-- Decorators -->
+		<dict>
+			<key>scope</key>
+			<string>meta.decorator, punctuation.definition.decorator</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#F0F0C0</string>
+			</dict>
+		</dict>
+		<!-- Markup headings -->
+		<dict>
+			<key>scope</key>
+			<string>markup.heading, entity.name.section</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#79B8F0</string>
+				<key>fontStyle</key>
+				<string>bold</string>
+			</dict>
+		</dict>
+	</array>
+</dict>
+</plist>

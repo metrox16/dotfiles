@@ -1,2 +1,10 @@
-# dotfiles
-Dotfiles config 
+# Dotfiles
+
+Dotfiles config by Barnabás Vass.
+
+## Usage
+
+```sh
+```
+
+

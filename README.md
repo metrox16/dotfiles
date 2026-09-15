@@ -47,8 +47,14 @@ nvim-treesitter builds each parser by calling the `tree-sitter` CLI, which in
 turn compiles C, so a compiler has to be present and the CLI is installed
 alongside Neovim. Its official builds need a recent glibc, so on an older
 distribution get it from brew, `cargo install tree-sitter-cli` or a distro
-package. Without either prerequisite the parsers are skipped, with a warning,
-and everything else still works.
+package.
+
+This is checked before any work starts, and when something is missing you are
+asked what to do: install it and retry, which is the answer for a machine where
+you have root, skip the parsers and get the rest, or abort before anything is
+touched. A non-interactive run skips them and says so, `--skip-parsers` does not
+ask at all, and a run that ends without parsers says as much in its last line
+rather than reporting plain success.
 
 ```sh
 ./install-nvim.sh          # Neovim and its plugins

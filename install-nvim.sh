@@ -20,11 +20,14 @@ source "$DOTFILES_DIR/lib/installer.sh" || {
     exit 1
 }
 
-readonly RELEASES_URL="https://github.com/neovim/neovim/releases"
+# Where releases are fetched from. Overridable so a mirror can be used on a
+# network without direct GitHub access, and so the download paths can be tested
+# against a local server.
+RELEASES_URL=${RELEASES_URL:-https://github.com/neovim/neovim/releases}
 readonly NVIM_REPO="neovim/neovim"
 readonly PLUG_URL="https://raw.githubusercontent.com/junegunn/vim-plug/master/plug.vim"
 readonly TS_CLI_REPO="tree-sitter/tree-sitter"
-readonly TS_CLI_RELEASES="https://github.com/$TS_CLI_REPO/releases"
+TS_CLI_RELEASES=${TS_CLI_RELEASES:-https://github.com/$TS_CLI_REPO/releases}
 
 # nvim-treesitter's main branch does not compile parsers itself, it calls the
 # tree-sitter CLI to do it, so the CLI is as much a prerequisite as the C
@@ -64,9 +67,13 @@ Steps:
   3. vim-plug    the plugin manager init.vim expects
   4. plugins     :PlugInstall for everything in the config
   5. parsers     the tree-sitter CLI, then the parsers the config asks for.
-                 nvim-treesitter builds parsers by calling that CLI, so both it
-                 and a C compiler have to be there; without a compiler the step
-                 is skipped with a warning.
+                 nvim-treesitter builds parsers by calling that CLI, which
+                 compiles C, so a compiler has to be there too.
+
+What the parsers need is checked before any work starts. When something is
+missing you are asked whether to install it and retry, skip the parsers and get
+on with the rest, or abort. A non-interactive run skips them and says so, and
+--skip-parsers does not ask at all.
 
 Re-running is safe.
 
@@ -395,9 +402,11 @@ install_ts_cli_via_release() {
         return 1
     fi
     if ! version=$(tool_version "$binary"); then
+        local glibc=''
+        # No pipe: read takes the first line of ldd's output directly.
+        command -v ldd >/dev/null 2>&1 && read -r glibc < <(ldd --version 2>/dev/null)
         print_status ERR "The downloaded tree-sitter CLI does not run on this system" >&2
-        print_status ERR "Its official builds are linked against a recent glibc; check yours with 'ldd --version'" >&2
-        print_status INFO "Ways around it: brew, 'cargo install tree-sitter-cli', or a distro package" >&2
+        print_status ERR "Its official builds need a recent glibc${glibc:+, and this system has: $glibc}" >&2
         return 1
     fi
 
@@ -446,6 +455,135 @@ ensure_ts_cli() {
     # The parser step runs nvim, which looks the CLI up on PATH, so this process
     # needs the link directory even when the rc file is left alone.
     prepend_install_bin_dir
+}
+
+# Ask what to do about a prerequisite this script cannot install itself. Prints
+# one of retry, skip or abort. Retry exists because a user with root can install
+# the missing piece in another terminal and carry on from here; skip exists
+# because a user without root still wants the rest. A run with nothing attached
+# to stdin cannot be asked, so it skips and says so, which keeps CI unattended.
+prereq_prompt() {
+    local answer
+    if [[ ! -t 0 ]]; then
+        print_status WARN "Not interactive, so this step is skipped" >&2
+        printf 'skip\n'
+        return 0
+    fi
+    while :; do
+        # read writes its prompt to stderr, so it stays visible even though this
+        # function's stdout is what the caller reads.
+        read -r -p "Install it and [r]etry, [s]kip this step, or [a]bort? [s] " answer
+        case ${answer,,} in
+            r | retry)
+                printf 'retry\n'
+                return 0
+                ;;
+            '' | s | skip)
+                printf 'skip\n'
+                return 0
+                ;;
+            a | abort)
+                printf 'abort\n'
+                return 0
+                ;;
+            *) print_status WARN "Answer r, s or a" >&2 ;;
+        esac
+    done
+}
+
+# Returns 0 when something can compile C. $CC is honoured because brew's gcc is
+# installed as a versioned name (gcc-14) that no plain "gcc" points at, and the
+# tree-sitter CLI compiles with $CC when it is set.
+have_compiler() {
+    [[ -n ${CC:-} ]] && command -v "$CC" >/dev/null 2>&1 && return 0
+    command -v cc >/dev/null 2>&1 ||
+        command -v gcc >/dev/null 2>&1 ||
+        command -v clang >/dev/null 2>&1
+}
+
+# Try to get a compiler from brew, since a machine with brew needs no root and
+# no questions. Exports CC on success, because brew installs gcc under a
+# versioned name that nothing on PATH resolves to.
+# Args: path to brew
+brew_install_compiler() {
+    local brew=$1 prefix candidate newest=''
+    print_status INFO "Installing gcc with brew (this can take a while)"
+    "$brew" install gcc >/dev/null 2>&1
+
+    prefix=$("$brew" --prefix gcc 2>/dev/null)
+    [[ -n $prefix ]] || return 1
+    # gcc-15 sorts after gcc-9 by version, not by string, so all are compared.
+    for candidate in "$prefix"/bin/gcc-[0-9]*; do
+        [[ -x $candidate ]] || continue
+        if [[ -z $newest ]] || version_gt "${candidate##*-}" "${newest##*-}"; then
+            newest=$candidate
+        fi
+    done
+
+    if [[ -z $newest ]]; then
+        # Some platforms do provide a plain gcc, so this is not a failure yet.
+        [[ -x $prefix/bin/gcc ]] && newest=$prefix/bin/gcc
+    fi
+    [[ -n $newest ]] || return 1
+
+    export CC=$newest
+    print_status DONE "Using the compiler brew installed: $CC"
+}
+
+# Check what the parser step needs before any work is done, so the question is
+# asked at the start rather than after a download. Only the C compiler is
+# checked here: the tree-sitter CLI is something this script installs itself, and
+# is dealt with at the point it turns out to be unavailable.
+# Sets skip_parsers when the answer is to skip.
+check_parser_prereqs() {
+    local brew tried_brew=0
+    while ((!skip_parsers)); do
+        have_compiler && return 0
+
+        # brew needs neither root nor a question, so it gets first refusal.
+        if ((!tried_brew)) && [[ $method != release ]]; then
+            tried_brew=1
+            brew=$(find_brew)
+            if [[ -n $brew ]]; then
+                brew_install_compiler "$brew" && continue
+                print_status WARN "brew could not provide a compiler"
+            fi
+        fi
+
+        print_status WARN "No C compiler found, and the tree-sitter parsers cannot be built without one"
+        print_status INFO "With root: apt install build-essential, dnf install gcc, or xcode-select --install on macOS"
+        case $(prereq_prompt) in
+            retry) print_status INFO "Looking again" ;;
+            skip)
+                skip_parsers=1
+                print_status INFO "Continuing without the parsers; everything else still works"
+                ;;
+            abort)
+                print_status INFO "Stopping at your request, nothing has been changed"
+                exit 2
+                ;;
+        esac
+    done
+    return 0
+}
+
+# Get a tree-sitter CLI, asking what to do when none can be had. The usual cause
+# is a prebuilt binary that will not run on an older system C library.
+# Returns 1 when the parsers should be skipped.
+ensure_ts_cli_interactive() {
+    while ! ensure_ts_cli; do
+        print_status WARN "Without a tree-sitter CLI the parsers cannot be built"
+        print_status INFO "Get one with brew, 'cargo install tree-sitter-cli' or a distro package"
+        case $(prereq_prompt) in
+            retry) print_status INFO "Looking again" ;;
+            skip) return 1 ;;
+            abort)
+                print_status INFO "Stopping at your request"
+                exit 2
+                ;;
+        esac
+    done
+    return 0
 }
 
 # Fetch vim-plug into the autoload directory init.vim expects.
@@ -503,6 +641,11 @@ nvim_headless_output() {
 }
 
 failed=0
+parsers_skipped=0
+
+# Asked first, before anything is downloaded or linked, so a missing compiler
+# does not come to light at the end of a long run.
+check_parser_prereqs
 
 if ((skip_nvim)); then
     print_status INFO "Skipping the Neovim step"
@@ -533,20 +676,11 @@ install_plug || failed=1
 
 run_headless "Installing plugins" "+PlugInstall --sync" +qa || failed=1
 
-parsers_skipped=0
-
 if ((skip_parsers)); then
     print_status INFO "Skipping the tree-sitter step"
     parsers_skipped=1
-elif ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1; then
-    # Checked before the CLI is fetched: the CLI compiles each parser with the
-    # system compiler, so without one there is no point downloading it.
-    print_status WARN "No C compiler found, skipping tree-sitter parsers"
-    print_status INFO "Install a compiler (gcc or clang) and rerun to get them"
-    parsers_skipped=1
-elif ! ensure_ts_cli; then
-    print_status WARN "No usable tree-sitter CLI, skipping the parsers"
-    print_status INFO "nvim-treesitter builds parsers by calling the CLI, so it cannot work without one"
+elif ! ensure_ts_cli_interactive; then
+    print_status WARN "Skipping the tree-sitter parsers"
     parsers_skipped=1
 else
     # The language list lives in the nvim config and is exported as

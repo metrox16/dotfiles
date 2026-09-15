@@ -5,11 +5,41 @@ vim.g.ts_languages = {
     'json', 'yaml', 'python', 'diff', 'git_config',
 }
 
--- Interactive runs install missing parsers in the background. In headless runs
--- (install-nvim.sh) the installer calls install() itself and waits for it, so
--- starting a second, unawaited install here would race it.
+-- Interactive runs install whatever parsers are missing, in the background. In
+-- headless runs (install-nvim.sh) the installer calls install() itself and waits
+-- for it, so starting a second, unawaited install here would race it.
+--
+-- The prerequisites are checked first because nvim-treesitter does not compile
+-- parsers itself: it shells out to the tree-sitter CLI, which in turn needs a C
+-- compiler. Without them every start would download all the parser sources and
+-- then fail on each one, so on a machine that cannot build them nothing is
+-- attempted and the rest of the config still works.
+local function install_missing_parsers()
+  if vim.fn.executable('tree-sitter') ~= 1 then return end
+  if vim.fn.executable('cc') ~= 1 and vim.fn.executable('gcc') ~= 1 then return end
+
+  local ok, ts = pcall(require, 'nvim-treesitter')
+  if not ok then return end
+
+  local installed = {}
+  for _, lang in ipairs(ts.get_installed()) do
+    installed[lang] = true
+  end
+
+  local missing = {}
+  for _, lang in ipairs(vim.g.ts_languages) do
+    if not installed[lang] then
+      missing[#missing + 1] = lang
+    end
+  end
+
+  if #missing > 0 then
+    ts.install(missing)
+  end
+end
+
 if #vim.api.nvim_list_uis() > 0 then
-  require('nvim-treesitter').install(vim.g.ts_languages)
+  install_missing_parsers()
 end
 
 vim.treesitter.language.register('bash', 'sh', 'yaml', 'json', 'c', 'java')

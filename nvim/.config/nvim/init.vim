@@ -1,4 +1,6 @@
-call plug#begin('~/.local/share/nvim/plugged')
+" stdpath('data') is where install-nvim.sh puts vim-plug too, so both follow
+" XDG_DATA_HOME when it is set instead of assuming ~/.local/share.
+call plug#begin(stdpath('data') . '/plugged')
 Plug 'nvim-treesitter/nvim-treesitter', {'do': ':TSUpdate'}
 Plug 'OXY2DEV/markview.nvim'
 Plug 'nvim-lua/plenary.nvim'

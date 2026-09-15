@@ -39,7 +39,8 @@ never linked.
 
 `install-nvim.sh` sets up Neovim, the plugin manager, the plugins and the
 tree-sitter parsers. `install-tools.sh` sets up the command line tools. Neither
-needs root.
+needs root, and both want bash 4 or newer — macOS still ships 3.2 as
+`/bin/bash`, so install a current bash there first.
 
 ```sh
 ./install-nvim.sh          # Neovim and its plugins
@@ -52,8 +53,15 @@ needs root.
 Anything already installed that meets its minimum version is left alone.
 Otherwise the latest version is installed, preferring Homebrew and falling back
 to the project's own prebuilt release (Linux and macOS, x86_64 and arm64).
-Payloads are kept in versioned directories with a `current` symlink, so a
-rollback is one symlink away.
+Homebrew counts as available when `brew` is on PATH or `HOMEBREW_PREFIX` is
+exported — no install location is guessed, and where brew put the binary is
+asked of brew itself. Point `DOTFILES_BREW` at a brew that is neither on PATH
+nor exported.
+Everything stays under `~/.local`: the executables land in `~/.local/bin`, which
+is the only directory put on PATH, and an unpacked release keeps its own tree in
+`~/.local/opt/<tool>/<version>` with a `current` symlink, so a rollback is one
+symlink away. Override either with `--prefix`, `TOOLS_INSTALL_ROOT` or
+`NVIM_INSTALL_ROOT`.
 
 Adding a tool means adding a row to the table at the top of the script: its
 repository, brew formula and minimum version. Release assets are matched by

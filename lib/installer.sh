@@ -16,6 +16,16 @@
 # on purpose. These functions bootstrap machines where the nicer tools are not
 # installed yet, which is the whole point of the install scripts.
 
+# These libraries use associative arrays, which macOS's stock /bin/bash is too
+# old for. The feature itself is probed rather than a version number compared,
+# so what is tested is what is actually needed. The subshell keeps the throwaway
+# variable, and the error message of an old bash, out of the way.
+if ! (declare -A _probe=()) 2>/dev/null; then
+    echo "This bash has no associative arrays, so it is too old to run this." >&2
+    echo "Use bash 4 or newer; on macOS, install a current bash and rerun." >&2
+    exit 1
+fi
+
 LIB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd -P)
 # shellcheck source=logger.sh
 source "$LIB_DIR/logger.sh" || {
@@ -23,8 +33,12 @@ source "$LIB_DIR/logger.sh" || {
     exit 1
 }
 
+# Everything lives under ~/.local: the executables on PATH in bin, the unpacked
+# release trees in opt. A downloaded release is not a bare binary (Neovim ships
+# lib and share/nvim/runtime, the Rust tools ship man pages and completions), so
+# the payload needs a directory of its own and cannot sit in a bin directory.
 : "${INSTALL_BIN_DIR:=$HOME/.local/bin}"
-: "${INSTALL_ROOT:=$HOME/Apps}"
+: "${INSTALL_ROOT:=$HOME/.local/opt}"
 
 # Download a URL to a file, using whichever fetcher exists.
 # Args: url, output path
@@ -109,25 +123,35 @@ version_gt() {
     version_ge "$1" "$2" && ! version_ge "$2" "$1"
 }
 
-# Print the path to a usable brew, looking beyond PATH so a brew that is
-# installed but not yet exported is still found.
+# Print the path to a usable brew, or nothing when this machine has none.
+# Only brew's own mechanisms are consulted, so no install location is baked in:
+# the command on PATH, and HOMEBREW_PREFIX, which "brew shellenv" exports. A
+# brew that is installed but reachable through neither is not used; the install
+# scripts then fall back to the project's own release, which is the same thing
+# they do on a machine without brew. Set DOTFILES_BREW to point at an
+# unexported brew explicitly.
 find_brew() {
     local candidate
+
+    if [[ -n ${DOTFILES_BREW:-} ]]; then
+        if [[ -x $DOTFILES_BREW ]]; then
+            printf '%s\n' "$DOTFILES_BREW"
+            return 0
+        fi
+        print_status WARN "DOTFILES_BREW is not an executable: $DOTFILES_BREW" >&2
+    fi
+
     candidate=$(command -v brew 2>/dev/null)
     if [[ -x $candidate ]]; then
         printf '%s\n' "$candidate"
         return 0
     fi
-    for candidate in "$HOME/Apps/brew/bin/brew" \
-        /home/linuxbrew/.linuxbrew/bin/brew \
-        "$HOME/.linuxbrew/bin/brew" \
-        /opt/homebrew/bin/brew \
-        /usr/local/bin/brew; do
-        if [[ -x $candidate ]]; then
-            printf '%s\n' "$candidate"
-            return 0
-        fi
-    done
+
+    if [[ -n ${HOMEBREW_PREFIX:-} ]] && [[ -x $HOMEBREW_PREFIX/bin/brew ]]; then
+        printf '%s\n' "$HOMEBREW_PREFIX/bin/brew"
+        return 0
+    fi
+
     return 1
 }
 

@@ -29,7 +29,7 @@ readonly PLUG_URL="https://raw.githubusercontent.com/junegunn/vim-plug/master/pl
 # uses the nvim-treesitter main branch, which needs it.
 MIN_NVIM_VERSION=${MIN_NVIM_VERSION:-0.11.0}
 
-install_root=${NVIM_INSTALL_ROOT:-$HOME/Apps/nvim}
+install_root=${NVIM_INSTALL_ROOT:-$HOME/.local/opt/nvim}
 INSTALL_BIN_DIR=${NVIM_BIN_DIR:-$HOME/.local/bin}
 method=auto
 force=0

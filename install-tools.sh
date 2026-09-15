@@ -48,7 +48,7 @@ declare -A TOOL_ALIAS=(
     [fdfind]=fd
 )
 
-INSTALL_ROOT=${TOOLS_INSTALL_ROOT:-$HOME/Apps}
+INSTALL_ROOT=${TOOLS_INSTALL_ROOT:-$HOME/.local/opt}
 INSTALL_BIN_DIR=${TOOLS_BIN_DIR:-$HOME/.local/bin}
 method=auto
 force=0

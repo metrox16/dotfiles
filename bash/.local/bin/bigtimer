@@ -1,0 +1,366 @@
+#!/usr/bin/env bash
+###################################################################
+# Script Name : bigtimer
+# Description : A countdown in block characters, with a progress bar
+# Args : [options] DURATION
+# Author : Barnabás Vass
+###################################################################
+#
+# The digits and the terminal handling are bigclock's, from ../lib/bigdigits.sh.
+# Time is measured with EPOCHSECONDS rather than by counting ticks, so a slow
+# frame or a pause cannot make the timer drift.
+
+lib=${BASH_SOURCE[0]%/*}/../lib/bigdigits.sh
+# shellcheck source=SCRIPTDIR/../lib/bigdigits.sh
+if ! source "$lib"; then
+    printf '%s: cannot load %s\n' "${0##*/}" "$lib" >&2
+    exit 1
+fi
+
+usage() {
+    cat <<EOF
+Usage: ${0##*/} [options] DURATION
+
+Counts DURATION down, showing what is left in block characters with a progress
+bar under it. With --up the digits count up from zero instead, while the bar
+still fills as the time goes.
+
+Duration can be written as:
+  90 or 90s     seconds
+  5m, 2h        minutes, hours
+  1h30m, 2m30s  a chain of those
+  5:00, 1:02:03 mm:ss or hh:mm:ss
+
+Keys: space pauses and resumes, q or Ctrl-C quits.
+
+Options:
+  -u, --up           Count up from zero rather than down to it
+  -b, --block CHAR   Character the digits are drawn with (default: a full block)
+  -t, --track CHAR   Character the empty part of the bar is drawn with
+  -c, --colour NAME  Colour: a name (red, green, yellow, blue, magenta, cyan,
+                     white) or a 0-255 colour number
+  -s, --scale N      Fixed scale: rows per font pixel, the width follows from
+                     the aspect so the digits keep their shape
+  -f, --fill AMOUNT  How much of the terminal to use, as a percentage or a
+                     fraction: 80 and 0.8 mean the same thing (default: 100)
+  -a, --aspect N     Columns per row of a terminal cell, which is how the digits
+                     are kept from looking stretched (default: 2)
+  -D, --no-status    Leave out the line of elapsed, total and percent
+  -q, --quiet        Do not beep when the time is up
+  -1, --once         Draw the first frame and exit
+  -h, --help         Show this help
+
+Examples:
+  ${0##*/} 5m                # five minutes, counting down
+  ${0##*/} 25m -c green      # a pomodoro
+  ${0##*/} 1h30m --up        # count up towards an hour and a half
+  ${0##*/} 90 -f 0.8         # a minute and a half, with a border
+
+Environment:
+  BIGTIMER_FILL, BIGTIMER_ASPECT, BIGTIMER_BLOCK, BIGTIMER_TRACK and
+  BIGTIMER_COLOUR set the defaults. An option on the command line still wins.
+EOF
+}
+
+# Turn a duration into whole seconds. Prints nothing and fails when it is not one.
+# Args: a duration such as 90, 90s, 5m, 1h30m, 5:00 or 1:02:03
+parse_duration() {
+    local spec=$1 total=0 part value unit rest
+    local -a parts=()
+
+    case $spec in
+        *:*)
+            IFS=: read -r -a parts <<<"$spec"
+            ((${#parts[@]} <= 3)) || return 1
+            for part in "${parts[@]}"; do
+                [[ $part =~ ^[0-9]+$ ]] || return 1
+                total=$((total * 60 + 10#$part))
+            done
+            ;;
+        *[hms]*)
+            rest=$spec
+            while [[ -n $rest ]]; do
+                [[ $rest =~ ^([0-9]+)([hms])(.*)$ ]] || return 1
+                value=${BASH_REMATCH[1]}
+                unit=${BASH_REMATCH[2]}
+                rest=${BASH_REMATCH[3]}
+                case $unit in
+                    h) total=$((total + value * 3600)) ;;
+                    m) total=$((total + value * 60)) ;;
+                    s) total=$((total + value)) ;;
+                esac
+            done
+            ;;
+        *)
+            [[ $spec =~ ^[0-9]+$ ]] || return 1
+            total=$((10#$spec))
+            ;;
+    esac
+
+    ((total > 0)) || return 1
+    printf '%s\n' "$total"
+}
+
+# Print seconds as MM:SS, or H:MM:SS once the total runs to an hour, so the
+# layout does not change halfway through.
+# Args: seconds
+format_time() {
+    local secs=$1
+    if ((show_hours)); then
+        printf '%d:%02d:%02d\n' $((secs / 3600)) $(((secs % 3600) / 60)) $((secs % 60))
+    else
+        printf '%02d:%02d\n' $((secs / 60)) $((secs % 60))
+    fi
+}
+
+block=${BIGTIMER_BLOCK:-$'\u2588'}
+track=${BIGTIMER_TRACK:-$'\u2591'}
+colour=${BIGTIMER_COLOUR:-}
+colour_given=$colour
+scale=0
+fill=$(percentage "${BIGTIMER_FILL:-100}")
+aspect=${BIGTIMER_ASPECT:-2}
+count_up=0
+show_status=1
+quiet=0
+once=0
+duration=''
+
+# Options and the duration may come in any order.
+while (($# > 0)); do
+    case $1 in
+        -u | --up) count_up=1 ;;
+        -b | --block)
+            block=$2
+            shift
+            ;;
+        -t | --track)
+            track=$2
+            shift
+            ;;
+        -c | --colour | --color)
+            colour=$2
+            colour_given=$2
+            shift
+            ;;
+        -s | --scale)
+            scale=$2
+            shift
+            ;;
+        -f | --fill)
+            fill=$(percentage "$2")
+            shift
+            ;;
+        -a | --aspect)
+            aspect=$2
+            shift
+            ;;
+        -D | --no-status) show_status=0 ;;
+        -q | --quiet) quiet=1 ;;
+        -1 | --once) once=1 ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        -*)
+            printf '%s: unknown option: %s\n' "${0##*/}" "$1" >&2
+            usage >&2
+            exit 2
+            ;;
+        *)
+            if [[ -n $duration ]]; then
+                printf '%s: one duration at a time: %s\n' "${0##*/}" "$1" >&2
+                exit 2
+            fi
+            duration=$1
+            ;;
+    esac
+    shift
+done
+
+if [[ -z $duration ]]; then
+    printf '%s: no duration given\n' "${0##*/}" >&2
+    usage >&2
+    exit 2
+fi
+
+if ! total=$(parse_duration "$duration"); then
+    printf '%s: not a duration: %s\n' "${0##*/}" "$duration" >&2
+    exit 2
+fi
+
+if ! colour=$(resolve_colour "$colour"); then
+    printf '%s: not a colour: %s\n' "${0##*/}" "$colour_given" >&2
+    exit 2
+fi
+
+if [[ ! $scale =~ ^[0-9]+$ ]]; then
+    printf '%s: not a scale: %s\n' "${0##*/}" "$scale" >&2
+    exit 2
+fi
+
+if [[ ! $fill =~ ^[0-9]+$ ]] || ((fill < 10 || fill > 100)); then
+    printf '%s: fill must be 10-100 percent, or 0.1-1.0: %s\n' "${0##*/}" "$fill" >&2
+    exit 2
+fi
+
+if [[ ! $aspect =~ ^[0-9]+$ ]] || ((aspect < 1 || aspect > 6)); then
+    printf '%s: aspect must be between 1 and 6: %s\n' "${0##*/}" "$aspect" >&2
+    exit 2
+fi
+
+show_hours=0
+((total >= 3600)) && show_hours=1
+# The widest string that will be shown decides the layout, so the digits keep
+# still instead of resizing as the numbers get shorter.
+frame_pixels=$(glyph_pixels "$(format_time "$total")")
+# Five rows of digits, a blank row, then the bar, which is one font pixel thick.
+frame_rows=7
+
+# Draw one frame: the digits, the bar, and the status line under it. Every line
+# is padded so the frame before it is overwritten, which is what stops it
+# flickering, and nothing is cleared in between.
+# Args: seconds to show, elapsed seconds, status text
+draw_frame() {
+    local shown=$1 elapsed=$2 status=$3
+    local w h n row pad frame='\033[H' width filled
+    local max_cols max_rows bar=''
+    local -a rows=()
+
+    if ((scale > 0)); then
+        h=$scale
+    else
+        # The largest whole scale that fits the box both ways. A cell is taller
+        # than it is wide, so the width of a font pixel is multiplied by the
+        # aspect to keep it square.
+        max_cols=$((term_cols * fill / 100))
+        max_rows=$((term_lines * fill / 100 - show_status * 2))
+        h=$((max_rows / frame_rows))
+        ((h > max_cols / (frame_pixels * aspect))) && h=$((max_cols / (frame_pixels * aspect)))
+    fi
+    ((h < 1)) && h=1
+    w=$((h * aspect))
+    width=$((w * frame_pixels))
+
+    build_block "$(format_time "$shown")" "$w" "$h" "$block"
+    rows=("${BLOCK_ROWS[@]}")
+
+    # The bar is as wide as the digits and as thick as one font pixel.
+    filled=$((width * elapsed / total))
+    ((filled > width)) && filled=$width
+    printf -v bar '%*s' "$filled" ''
+    bar=${bar// /$block}
+    printf -v pad '%*s' $((width - filled)) ''
+    bar+=${pad// /$track}
+    printf -v pad '%*s' "$width" ''
+    rows+=("$pad")
+    for ((n = 0; n < h; n++)); do rows+=("$bar"); done
+
+    printf -v pad '%*s' $(((term_cols - width) / 2)) ''
+    for ((n = 0; n < (term_lines - ${#rows[@]} - show_status * 2) / 2; n++)); do
+        frame+='\033[K\n'
+    done
+    for row in "${rows[@]}"; do frame+="$pad$row\033[K\n"; done
+    if ((show_status)); then
+        printf -v pad '%*s' $(((term_cols - ${#status}) / 2)) ''
+        frame+="\033[K\n$pad$status\033[K\n"
+    fi
+    printf '%b\033[J' "$colour$frame"
+}
+
+# The line under the bar: where the timer is, and what it is doing.
+# Args: elapsed seconds, extra note (may be empty)
+status_line() {
+    local elapsed=$1 note=$2 text
+    printf -v text '%s of %s   %s%%' \
+        "$(format_time "$elapsed")" "$(format_time "$total")" "$((elapsed * 100 / total))"
+    [[ -n $note ]] && text+="   $note"
+    printf '%s\n' "$text"
+}
+
+read_terminal_size
+# A resize interrupts the read below, so the next frame comes out at the new size.
+trap read_terminal_size WINCH
+
+if ((once)); then
+    if ((count_up)); then
+        draw_frame 0 0 "$(status_line 0 '')"
+    else
+        draw_frame "$total" 0 "$(status_line 0 '')"
+    fi
+    [[ -n $colour ]] && printf '\033[0m'
+    exit 0
+fi
+
+if [[ ! -t 1 ]]; then
+    printf '%s: needs a terminal\n' "${0##*/}" >&2
+    exit 1
+fi
+
+printf '\033[?25l' # hide the cursor
+trap 'printf "\033[0m\033[?25h\033[2J\033[H"; exit 0' EXIT INT TERM HUP
+
+started=$EPOCHSECONDS
+paused_for=0
+paused_at=0
+elapsed=0
+key=''
+note=''
+
+while :; do
+    if ((paused_at)); then
+        elapsed=$((paused_at - started - paused_for))
+    else
+        elapsed=$((EPOCHSECONDS - started - paused_for))
+    fi
+    ((elapsed > total)) && elapsed=$total
+    ((elapsed < 0)) && elapsed=0
+
+    note=''
+    ((paused_at)) && note='paused'
+    if ((count_up)); then
+        draw_frame "$elapsed" "$elapsed" "$(status_line "$elapsed" "$note")"
+    else
+        draw_frame $((total - elapsed)) "$elapsed" "$(status_line "$elapsed" "$note")"
+    fi
+
+    ((elapsed >= total)) && break
+
+    # A second of waiting, cut short by a keypress. Without a terminal on stdin
+    # read would see EOF and return at once, so sleep waits it out instead.
+    if [[ -t 0 ]]; then
+        # IFS= matters: without it read strips the whitespace and a press of the
+        # space bar arrives as an empty string.
+        if IFS= read -rsn1 -t 1 key; then
+            case $key in
+                ' ')
+                    if ((paused_at)); then
+                        paused_for=$((paused_for + EPOCHSECONDS - paused_at))
+                        paused_at=0
+                    else
+                        paused_at=$EPOCHSECONDS
+                    fi
+                    ;;
+                q | Q) exit 0 ;;
+            esac
+        fi
+    else
+        sleep 1
+    fi
+done
+
+((quiet)) || printf '\a'
+if ((count_up)); then
+    draw_frame "$total" "$total" "$(status_line "$total" 'time is up')"
+else
+    draw_frame 0 "$total" "$(status_line "$total" 'time is up')"
+fi
+
+# Wait to be noticed rather than wiping the screen the moment it finishes.
+if [[ -t 0 ]]; then
+    ((quiet)) || {
+        sleep 1
+        printf '\a'
+    }
+    read -rsn1
+fi

@@ -115,8 +115,10 @@ that too: the config files are linked into `$HOME`, its `aliases.sh` is kept in
 your shell startup file, and an executable `post-install.sh` runs afterwards
 (bat uses one to rebuild its theme cache). The `bash` package holds what belongs
 to no tool at all — navigation aliases, history settings, a couple of functions,
-and `.inputrc` for readline itself: coloured completion listings and 8-bit clean
-input — and `install.sh` installs those.
+`.inputrc` for readline itself (coloured completion listings, 8-bit clean input),
+and two commands under `.local/bin`: `bigclock` and `bigtimer`, which draw the
+time and a countdown in block characters and share the font in
+`.local/lib/bigdigits.sh`. `install.sh` installs all of that.
 
 An `aliases.sh` is kept in a region of the startup file marked like this:
 

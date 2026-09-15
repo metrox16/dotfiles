@@ -10,6 +10,13 @@
 # %(...)T and the tick from read, so this costs nothing to leave running. The
 # terminal size is read at the start and again on a resize, not every tick.
 
+lib=${BASH_SOURCE[0]%/*}/../lib/bigdigits.sh
+# shellcheck source=SCRIPTDIR/../lib/bigdigits.sh
+if ! source "$lib"; then
+    printf '%s: cannot load %s\n' "${0##*/}" "$lib" >&2
+    exit 1
+fi
+
 usage() {
     cat <<EOF
 Usage: ${0##*/} [options]
@@ -53,42 +60,9 @@ Environment:
 EOF
 }
 
-# Five rows of three pixels per character. Everything else is drawn blank.
-declare -A GLYPH=(
-    [0]='111 101 101 101 111' [1]='010 010 010 010 010'
-    [2]='111 001 111 100 111' [3]='111 001 111 001 111'
-    [4]='101 101 111 001 001' [5]='111 100 111 001 111'
-    [6]='111 100 111 101 111' [7]='111 001 001 001 001'
-    [8]='111 101 111 101 111' [9]='111 101 111 001 111'
-    [':']='000 010 000 010 000'
-)
-declare -A COLOUR=(
-    [red]=1 [green]=2 [yellow]=3 [blue]=4 [magenta]=5 [cyan]=6 [white]=7
-)
-
-# Turn a fraction into a percentage, so the padding can be given either way:
-# 0.8 and 80 both mean four fifths. Bash has no floating point, so the first two
-# digits of the fraction are the percentage.
-# Args: a percentage or a fraction
-percentage() {
-    local value=$1 whole frac
-    case $value in
-        *.*)
-            whole=${value%%.*}
-            frac=${value#*.}0
-            frac=${frac:0:2}
-            if [[ ${whole:-0} =~ ^[0-9]+$ && $frac =~ ^[0-9]+$ ]]; then
-                printf '%s\n' "$((${whole:-0} * 100 + 10#$frac))"
-            else
-                printf '%s\n' "$value" # not a number: rejected by the check below
-            fi
-            ;;
-        *) printf '%s\n' "$value" ;;
-    esac
-}
-
 block=${BIGCLOCK_BLOCK:-$'\u2588'}
 colour=${BIGCLOCK_COLOUR:-}
+colour_given=$colour
 scale=0
 fill=$(percentage "${BIGCLOCK_FILL:-100}")
 aspect=${BIGCLOCK_ASPECT:-2}
@@ -108,6 +82,7 @@ while (($# > 0)); do
             ;;
         -c | --colour | --color)
             colour=$2
+            colour_given=$2
             shift
             ;;
         -s | --scale)
@@ -140,14 +115,9 @@ while (($# > 0)); do
     shift
 done
 
-if [[ -n $colour ]]; then
-    if [[ -n ${COLOUR[$colour]:-} ]]; then
-        colour=${COLOUR[$colour]}
-    elif [[ ! $colour =~ ^[0-9]+$ ]] || ((colour > 255)); then
-        printf '%s: not a colour: %s\n' "${0##*/}" "$colour" >&2
-        exit 2
-    fi
-    colour=$'\033[38;5;'$colour'm'
+if ! colour=$(resolve_colour "$colour"); then
+    printf '%s: not a colour: %s\n' "${0##*/}" "$colour_given" >&2
+    exit 2
 fi
 
 if [[ ! $scale =~ ^[0-9]+$ ]]; then
@@ -180,60 +150,6 @@ else
 fi
 frame_pixels=$((glyph_count * 4 - 1))
 
-term_cols=80
-term_lines=24
-
-# Ask the terminal how big it is. COLUMNS and LINES are not exported to a
-# script, so this is the only way, and it is done once and on resize rather than
-# every tick.
-read_terminal_size() {
-    local size=''
-    # An exported COLUMNS and LINES wins, which is how a size can be forced.
-    if [[ -n ${COLUMNS:-} && -n ${LINES:-} ]]; then
-        term_cols=$COLUMNS
-        term_lines=$LINES
-    elif size=$(stty size 2>/dev/null </dev/tty); then
-        term_lines=${size%% *}
-        term_cols=${size##* }
-    else
-        term_lines=$(tput lines 2>/dev/null) || term_lines=24
-        term_cols=$(tput cols 2>/dev/null) || term_cols=80
-    fi
-    [[ $term_lines =~ ^[0-9]+$ ]] || term_lines=24
-    [[ $term_cols =~ ^[0-9]+$ ]] || term_cols=80
-}
-
-# Draw one frame: the time in block characters, centred, with every line padded
-# so the frame before it is overwritten. Nothing is cleared between frames,
-# which is what keeps it from flickering.
-# Args: time string, date string (may be empty)
-# Build the rows of one line of characters into BLOCK_ROWS, at the given scale.
-# Args: string, horizontal scale, vertical scale
-BLOCK_ROWS=()
-build_block() {
-    local text=$1 w=$2 h=$3
-    local i n r row pixels char on off
-    local -a bits
-
-    BLOCK_ROWS=()
-    printf -v off '%*s' "$w" ''
-    on=${off// /$block}
-
-    for ((r = 0; r < 5; r++)); do
-        row=''
-        for ((i = 0; i < ${#text}; i++)); do
-            char=${text:i:1}
-            read -r -a bits <<<"${GLYPH[$char]:-000 000 000 000 000}"
-            pixels=${bits[r]}
-            for ((n = 0; n < 3; n++)); do
-                [[ ${pixels:n:1} == 1 ]] && row+=$on || row+=$off
-            done
-            ((i < ${#text} - 1)) && row+=$off
-        done
-        for ((n = 0; n < h; n++)); do BLOCK_ROWS+=("$row"); done
-    done
-}
-
 # Draw one frame: the time in block characters, centred, with every line padded
 # so the frame before it is overwritten. Nothing is cleared between frames,
 # which is what keeps it from flickering.
@@ -265,16 +181,16 @@ draw_frame() {
         # than one long line, so both directions of the box get filled.
         top=${time%:*}
         bottom=${time##*:}
-        build_block "$top" "$w" "$h"
+        build_block "$top" "$w" "$h" "$block"
         rows=("${BLOCK_ROWS[@]}")
         printf -v inner '%*s' "$width" ''
         for ((n = 0; n < h; n++)); do rows+=("$inner"); done
-        build_block "$bottom" "$w" "$h"
+        build_block "$bottom" "$w" "$h" "$block"
         # The seconds are narrower than the line above, so they are centred in it.
         printf -v pad '%*s' $(((width - ${#BLOCK_ROWS[0]}) / 2)) ''
         for row in "${BLOCK_ROWS[@]}"; do rows+=("$pad$row"); done
     else
-        build_block "$time" "$w" "$h"
+        build_block "$time" "$w" "$h" "$block"
         rows=("${BLOCK_ROWS[@]}")
     fi
 

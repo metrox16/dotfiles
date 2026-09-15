@@ -31,6 +31,7 @@ declare -A TOOL_REPO=(
     [shfmt]=mvdan/sh
     [gdu]=dundee/gdu
     [zoxide]=ajeetdsouza/zoxide
+    [fzf]=junegunn/fzf
 )
 declare -A TOOL_BREW=(
     [bat]=bat
@@ -40,6 +41,7 @@ declare -A TOOL_BREW=(
     [shfmt]=shfmt
     [gdu]=gdu
     [zoxide]=zoxide
+    [fzf]=fzf
 )
 # Where brew installs a formula's binary under another name, to keep out of the
 # way of something else: brew's gdu is gdu-go, because coreutils ships a gdu.
@@ -54,6 +56,7 @@ declare -A TOOL_MIN=(
     [shfmt]=3.7.0
     [gdu]=5.20.0
     [zoxide]=0.9.0
+    [fzf]=0.48.0
 )
 # Names people type that are not the command name.
 declare -A TOOL_ALIAS=(

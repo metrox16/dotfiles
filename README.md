@@ -20,7 +20,7 @@ installed. `./install.sh -l` lists what is currently in the repo.
 git clone git@github.com:metrox16/dotfiles.git
 cd dotfiles
 ./install.sh          # 1. link configs (nvim, bat) + the common bash entries
-./install-tools.sh    # 2. bat, fd, rg, eza, shfmt, gdu, zoxide + aliases + the PATH line
+./install-tools.sh    # 2. bat, fd, rg, eza, shfmt, gdu, zoxide, fzf + aliases + PATH
 ./install-nvim.sh     # 3. Neovim, vim-plug, plugins, tree-sitter parsers
 
 

@@ -2,6 +2,9 @@
 
 Dotfiles config by Barnabás Vass.
 
+**! WRITTEN BY AI !**
+
+
 ## Layout
 
 Each top-level directory is a **package**, and its contents mirror `$HOME`.
@@ -17,7 +20,7 @@ installed. `./install.sh -l` lists what is currently in the repo.
 git clone git@github.com:metrox16/dotfiles.git
 cd dotfiles
 ./install.sh          # 1. link configs: nvim, bat (+ eza has none)
-./install-tools.sh    # 2. bat, fd, rg, eza + their aliases + the PATH line
+./install-tools.sh    # 2. bat, fd, rg, eza, shfmt + their aliases + the PATH line
 ./install-nvim.sh     # 3. Neovim, vim-plug, plugins, tree-sitter parsers
 
 
@@ -79,7 +82,10 @@ symlink away. Override either with `--prefix`, `TOOLS_INSTALL_ROOT` or
 
 Adding a tool means adding a row to the table at the top of the script: its
 repository, brew formula and minimum version. Release assets are matched by
-platform, so no per-project file names are hardcoded.
+platform, so no per-project file names are hardcoded: both spellings of the
+architecture are accepted (`x86_64` and `amd64`), and an asset that is a bare
+binary rather than an archive, which is how Go projects such as `shfmt` publish,
+is installed as it is.
 
 ### Tool config and aliases
 

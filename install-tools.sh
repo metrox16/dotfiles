@@ -28,24 +28,28 @@ declare -A TOOL_REPO=(
     [fd]=sharkdp/fd
     [rg]=BurntSushi/ripgrep
     [eza]=eza-community/eza
+    [shfmt]=mvdan/sh
 )
 declare -A TOOL_BREW=(
     [bat]=bat
     [fd]=fd
     [rg]=ripgrep
     [eza]=eza
+    [shfmt]=shfmt
 )
 declare -A TOOL_MIN=(
     [bat]=0.24.0
     [fd]=9.0.0
     [rg]=14.0.0
     [eza]=0.18.0
+    [shfmt]=3.7.0
 )
 # Names people type that are not the command name.
 declare -A TOOL_ALIAS=(
     [ripgrep]=rg
     [batcat]=bat
     [fdfind]=fd
+    [sh]=shfmt
 )
 
 INSTALL_ROOT=${TOOLS_INSTALL_ROOT:-$HOME/.local/opt}
@@ -251,7 +255,17 @@ install_tool_via_release() {
     fi
 
     payload=$tmp/payload
-    extract_archive "$archive" "$payload" || return 1
+    if is_archive_name "$asset"; then
+        extract_archive "$archive" "$payload" || return 1
+    else
+        # Not an archive: the asset is the bare binary, named after the platform
+        # rather than the command (shfmt_v3.14.1_linux_amd64). It is put into the
+        # payload under the command name, and made executable since a download is
+        # not, so everything below treats both kinds of release the same way.
+        mkdir -p "$payload" || return 1
+        mv -- "$archive" "$payload/$name" || return 1
+        chmod u+x -- "$payload/$name" || return 1
+    fi
     if ! binary=$(find_binary_in "$payload" "$name"); then
         print_status ERR "No $name binary inside $asset" >&2
         return 1

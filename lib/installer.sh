@@ -519,14 +519,18 @@ github_asset_names() {
 # Release assets of the Rust tools are named <tool>-<version>-<arch>-<os>.<ext>,
 # so the platform triple is matched instead of hardcoding names per project.
 pick_asset() {
-    local os arch arch_token name score best='' best_score=-1
+    local os arch token name score matched best='' best_score=-1
+    local -a arch_tokens
     os=$(uname -s)
     arch=$(uname -m)
 
+    # Both spellings of the architecture are accepted, because the naming
+    # follows the language rather than the platform: the Rust tools use the LLVM
+    # triple (x86_64, aarch64), Go projects the GOARCH name (amd64, arm64).
     case $arch in
-        x86_64 | amd64) arch_token=x86_64 ;;
-        aarch64 | arm64) arch_token=aarch64 ;;
-        *) arch_token=$arch ;;
+        x86_64 | amd64) arch_tokens=(x86_64 amd64) ;;
+        aarch64 | arm64) arch_tokens=(aarch64 arm64) ;;
+        *) arch_tokens=("$arch") ;;
     esac
 
     while IFS= read -r name; do
@@ -535,7 +539,14 @@ pick_asset() {
         [[ $name == *windows* || $name == *.msi || $name == *.exe* ]] && continue
         [[ $name == *.sha256 || $name == *.asc || $name == *.sig ]] && continue
         [[ $name == *.deb || $name == *.rpm ]] && continue
-        [[ $name == *"$arch_token"* ]] || continue
+        matched=0
+        for token in "${arch_tokens[@]}"; do
+            if [[ $name == *"$token"* ]]; then
+                matched=1
+                break
+            fi
+        done
+        ((matched)) || continue
         case $os in
             Linux) [[ $name == *linux* ]] || continue ;;
             Darwin) [[ $name == *darwin* || $name == *macos* ]] || continue ;;
@@ -559,6 +570,17 @@ pick_asset() {
 
     [[ -n $best ]] || return 1
     printf '%s\n' "$best"
+}
+
+# Returns 0 when a file name is one of the archives extract_archive unpacks.
+# A release asset that is not an archive is the bare binary itself, which is how
+# Go projects ship, so the caller can tell the two apart before unpacking.
+# Args: file name
+is_archive_name() {
+    case $1 in
+        *.tar.gz | *.tgz | *.tar.xz | *.tar.bz2 | *.tar | *.gz | *.zip) return 0 ;;
+    esac
+    return 1
 }
 
 # Unpack an archive into a directory, whatever the format.

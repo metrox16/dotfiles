@@ -93,7 +93,8 @@ $INSTALL_BIN_DIR is put ahead on PATH in your shell startup file so that
 version is the one that runs.
 
 When the repo holds a directory named after a tool, its config files are linked
-into \$HOME as well (a previous real file is kept as <name>.old) and its
+into \$HOME as well, or copied there with --copy so they outlive the repo (a
+previous real file is kept as <name>.old either way), and its
 aliases.sh is kept in a marked region of your shell startup file, whatever it
 contains: aliases, exports, functions, plain statements. An entry you already
 define the same way is left out, one you define differently goes in commented
@@ -108,6 +109,7 @@ Options:
   -m, --method M      Where tools come from: auto (default, brew first), brew
                       or release
   -f, --force         Install even when the installed version is new enough
+  -c, --copy          Copy a tool's config files instead of symlinking them
   -n, --dry-run       Report what would happen, change nothing
       --prefix DIR    Where versioned payloads are kept (default: $INSTALL_ROOT)
       --rc-file FILE  Shell startup file for aliases and the PATH line
@@ -132,6 +134,7 @@ while (($# > 0)); do
             ;;
         -f | --force) force=1 ;;
         -n | --dry-run) dry_run=1 ;;
+        -c | --copy) INSTALL_MODE=copy ;;
         --prefix)
             INSTALL_ROOT=$2
             shift
@@ -397,7 +400,11 @@ install_tool_extras() {
         while IFS= read -r src; do
             rel=${src#"$pkg"/}
             should_link "$pkg" "$rel" || continue
-            print_status INFO "$name: would link ~/$rel"
+            if [[ $INSTALL_MODE == copy ]]; then
+                print_status INFO "$name: would copy ~/$rel"
+            else
+                print_status INFO "$name: would link ~/$rel"
+            fi
         done < <(find "$pkg" -type f -o -type l)
         [[ -n $snippet ]] &&
             print_status INFO "$name: would keep aliases.sh in a region of your shell startup file"

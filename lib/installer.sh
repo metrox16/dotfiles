@@ -40,6 +40,12 @@ source "$LIB_DIR/logger.sh" || {
 : "${INSTALL_BIN_DIR:=$HOME/.local/bin}"
 : "${INSTALL_ROOT:=$HOME/.local/opt}"
 
+# How a config file gets into $HOME: "link" points a symlink at the file in the
+# repo, so editing either side is editing the same file, and "copy" puts a real
+# file there, so what is installed keeps working after the repo is deleted. The
+# install scripts set this from their --copy flag.
+: "${INSTALL_MODE:=link}"
+
 # Download a URL to a file, using whichever fetcher exists.
 # Args: url, output path
 # Returns: 0 on success, 44 if the server says the file does not exist,
@@ -719,11 +725,18 @@ should_link() {
     return 0
 }
 
-# Symlink a config file into place, keeping any previous real file as <name>.old
-# as requested, rather than a timestamped copy.
+# Put a config file in place: a symlink to the file in the repo, or a copy of it
+# when INSTALL_MODE is "copy", for a machine where the repo is not going to stay
+# around. Any previous real file of yours is kept as <name>.old as requested,
+# rather than a timestamped copy.
 # Args: source path, target path
 link_config_file() {
     local src=$1 target=$2 rel=${2/#$HOME/~}
+
+    [[ $INSTALL_MODE == copy ]] && {
+        copy_config_file "$src" "$target"
+        return
+    }
 
     if [[ -L $target ]] && [[ $(readlink "$target") == "$src" ]]; then
         print_status OK "$rel already linked"
@@ -731,17 +744,56 @@ link_config_file() {
     fi
     mkdir -p "${target%/*}" || return 1
     if [[ -e $target ]] || [[ -L $target ]]; then
-        if ! mv -f -- "$target" "$target.old"; then
+        if [[ -f $target && ! -L $target ]] && cmp -s "$src" "$target"; then
+            # A copy of this very file, from an earlier --copy run or by hand:
+            # nothing of yours is lost by replacing it with the link.
+            rm -f -- "$target" || return 1
+        elif ! mv -f -- "$target" "$target.old"; then
             print_status ERR "Cannot move $rel aside" >&2
             return 1
+        else
+            print_status WARN "Existing $rel saved as ${rel}.old"
         fi
-        print_status WARN "Existing $rel saved as ${rel}.old"
     fi
     if ! ln -s -- "$src" "$target"; then
         print_status ERR "Cannot link $rel" >&2
         return 1
     fi
     print_status DONE "$rel -> $src"
+}
+
+# Copy a config file into place, so what is installed does not need the repo. An
+# identical copy is left alone and a symlink from an earlier run is replaced,
+# which is what makes switching between the two modes work in both directions.
+# Args: source path, target path
+copy_config_file() {
+    local src=$1 target=$2 rel=${2/#$HOME/~}
+
+    if [[ -f $target && ! -L $target ]] && cmp -s "$src" "$target"; then
+        print_status OK "$rel is already a copy of this file"
+        return 0
+    fi
+    mkdir -p "${target%/*}" || return 1
+
+    if [[ -L $target ]] && [[ $(readlink "$target") == "$src" ]]; then
+        # Our own symlink from a previous run: there is nothing of yours in it,
+        # so it goes without a backup.
+        rm -f -- "$target" || return 1
+    elif [[ -e $target ]] || [[ -L $target ]]; then
+        if ! mv -f -- "$target" "$target.old"; then
+            print_status ERR "Cannot move $rel aside" >&2
+            return 1
+        fi
+        print_status WARN "Existing $rel saved as ${rel}.old"
+    fi
+
+    # -p keeps the mode and the timestamps, so a copied config looks like the
+    # file in the repo rather than something newly written.
+    if ! cp -p -- "$src" "$target"; then
+        print_status ERR "Cannot copy to $rel" >&2
+        return 1
+    fi
+    print_status DONE "$rel copied from $src"
 }
 
 # Put $INSTALL_BIN_DIR on this process's PATH, so the steps that follow, and the

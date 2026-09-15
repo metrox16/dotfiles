@@ -21,10 +21,3 @@ fi
 #* If you want to use fzf Bash history, comment out this line
 # eval "$(fzf --bash)"
 
-# Pick a file and open it: fe, or fe partial-name to start narrowed down.
-fe() {
-    local file
-    file=$(fzf --query="${1:-}") || return 1
-    [[ -n $file ]] || return 1
-    "${EDITOR:-vi}" -- "$file"
-}

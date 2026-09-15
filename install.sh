@@ -27,6 +27,11 @@ Usage: ${0##*/} [options] [package ...]
 Symlinks the files of each package into \$HOME. With no package given, every
 package in the repo is installed.
 
+With --copy the files are copied instead, so what is installed does not need the
+repo afterwards and survives deleting it. The cost is that the two copies then
+drift apart: an edit in \$HOME is not an edit in the repo, and rerunning with
+--copy overwrites your edit with what the repo holds.
+
 When a package holds an aliases.sh, it is kept in a marked region of your shell
 startup file: aliases, exports, functions and anything else it contains are
 copied there verbatim, and a rerun rewrites that region rather than appending a
@@ -40,6 +45,7 @@ holding the entries that belong to no tool, is always installed.
 Options:
   -n, --dry-run   Show what would happen, change nothing
   -f, --force     Replace existing files without keeping a backup
+  -c, --copy      Copy the files instead of symlinking them
       --rc-file FILE      Shell startup file for the aliases.sh entries
       --no-shell-entries  Do not touch any shell startup file
   -l, --list      List available packages and exit
@@ -72,6 +78,7 @@ while (($# > 0)); do
     case $1 in
         -n | --dry-run) dry_run=1 ;;
         -f | --force) force=1 ;;
+        -c | --copy) INSTALL_MODE=copy ;;
         --no-shell-entries) shell_entries=0 ;;
         --rc-file)
             export DOTFILES_RC_FILE=$2
@@ -107,9 +114,9 @@ if ((${#packages[@]} == 0)); then
 fi
 
 failed=0
-linked=0
+installed=0
 
-# Symlink every file of one package into $HOME.
+# Put every file of one package into $HOME, as a symlink or as a copy.
 # Args: package name, absolute package directory
 link_package() {
     local pkg=$1 pkg_dir=$2 src rel target target_dir
@@ -120,13 +127,22 @@ link_package() {
         target=$HOME/$rel
         target_dir=${target%/*}
 
-        if [[ -L $target ]] && [[ $(readlink "$target") == "$src" ]]; then
+        if [[ $INSTALL_MODE == copy ]]; then
+            if [[ -f $target && ! -L $target ]] && cmp -s "$src" "$target"; then
+                print_status OK "$pkg: $rel is already a copy of this file"
+                continue
+            fi
+        elif [[ -L $target ]] && [[ $(readlink "$target") == "$src" ]]; then
             print_status OK "$pkg: $rel already linked"
             continue
         fi
 
         if ((dry_run)); then
-            print_status INFO "$pkg: would link $rel -> $src"
+            if [[ $INSTALL_MODE == copy ]]; then
+                print_status INFO "$pkg: would copy $rel from $src"
+            else
+                print_status INFO "$pkg: would link $rel -> $src"
+            fi
             continue
         fi
 
@@ -136,12 +152,12 @@ link_package() {
             continue
         fi
 
-        # --force throws the old file away, otherwise link_config_file keeps it
+        # --force throws the old file away, otherwise the installer keeps it
         # as <name>.old.
         ((force)) && [[ -e $target || -L $target ]] && rm -rf -- "$target"
 
         if link_config_file "$src" "$target"; then
-            linked=$((linked + 1))
+            installed=$((installed + 1))
         else
             failed=1
         fi
@@ -189,12 +205,14 @@ for pkg in "${packages[@]}"; do
     fi
 done
 
+[[ $INSTALL_MODE == copy ]] && verb=copied || verb=linked
+
 if ((dry_run)); then
     print_status INFO "Dry run - nothing was changed."
 elif ((failed)); then
-    print_status ERR "Finished with errors ($linked file(s) linked)." >&2
+    print_status ERR "Finished with errors ($installed file(s) installed)." >&2
 else
-    print_status DONE "Installed ${#packages[@]} package(s), $linked file(s) linked."
+    print_status DONE "Installed ${#packages[@]} package(s), $installed file(s) $verb."
 fi
 
 exit "$failed"

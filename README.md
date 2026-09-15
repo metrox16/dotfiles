@@ -27,12 +27,30 @@ cd dotfiles
 ./install.sh              # install every package
 ./install.sh <package>    # install one package
 ./install.sh -n           # preview (dry run)
+./install.sh -c           # copy the files instead of linking them
 ./install.sh -h           # help
 ```
 
 A real file already in the way is kept as `<file>.old`; `-f` replaces it without
 keeping anything. Re-running is safe — already correct links are reported as
 `ok`.
+
+### Copies instead of links
+
+`--copy` (`-c`) puts real files in `$HOME` rather than symlinks, so what is
+installed does not need the repo and keeps working after it is deleted. It works
+the same way in `install-tools.sh`, for the config files of a tool.
+
+Nothing else in an install points at the repo — the shell entries are written
+into the startup file as text, and a tool's binary is linked from
+`~/.local/opt`, not from here — so `--copy` is what makes the whole install
+self-contained.
+
+The trade is that the two copies drift: editing `~/.config/bat/config` is no
+longer editing the repo, and the next `--copy` run overwrites that edit with
+whatever the repo holds. Switching modes works in both directions, and an
+existing file that is already identical is replaced without leaving a `.old`
+behind.
 
 A file in a package that belongs to the repo rather than to `$HOME`, such as
 `aliases.sh`, is listed in that package's `.nolink`, one glob per line, and is
@@ -95,9 +113,10 @@ way of coreutils — that name goes in the `TOOL_BREW_BIN` row.
 When the repo holds a directory named after a tool, `install-tools.sh` installs
 that too: the config files are linked into `$HOME`, its `aliases.sh` is kept in
 your shell startup file, and an executable `post-install.sh` runs afterwards
-(bat uses one to rebuild its theme cache). The `bash` package holds the entries
-that belong to no tool at all — navigation aliases, history settings, a couple of
-functions — and `install.sh` installs those.
+(bat uses one to rebuild its theme cache). The `bash` package holds what belongs
+to no tool at all — navigation aliases, history settings, a couple of functions,
+and `.inputrc` for readline itself: coloured completion listings and 8-bit clean
+input — and `install.sh` installs those.
 
 An `aliases.sh` is kept in a region of the startup file marked like this:
 

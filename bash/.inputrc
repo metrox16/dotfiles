@@ -1,0 +1,18 @@
+# Start from the site defaults. readline reads ONE inputrc file and never
+# merges, so without this include every binding in /etc/inputrc (Home, End,
+# Delete, Ctrl-arrow word movement) is silently lost. A machine without the file,
+# which is the normal case on macOS, ignores the include.
+$include /etc/inputrc
+
+# Personal preferences
+set colored-stats on
+set colored-completion-prefix on
+
+# Keep readline 8-bit clean so UTF-8 input (emoji, CJK, arrows) is inserted
+# literally instead of being turned into ESC-prefixed meta commands.
+#   convert-meta on  turns byte 0x8c into ESC Ctrl-L -> clears the display
+#   output-meta off  renders bytes >= 0x80 as octal escapes like \237
+set meta-flag on
+set input-meta on
+set convert-meta off
+set output-meta on

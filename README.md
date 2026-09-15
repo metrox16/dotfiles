@@ -19,8 +19,8 @@ installed. `./install.sh -l` lists what is currently in the repo.
 ```sh
 git clone git@github.com:metrox16/dotfiles.git
 cd dotfiles
-./install.sh          # 1. link configs: nvim, bat (+ eza has none)
-./install-tools.sh    # 2. bat, fd, rg, eza, shfmt + their aliases + the PATH line
+./install.sh          # 1. link configs (nvim, bat) + the common bash entries
+./install-tools.sh    # 2. bat, fd, rg, eza, shfmt, gdu, zoxide + aliases + the PATH line
 ./install-nvim.sh     # 3. Neovim, vim-plug, plugins, tree-sitter parsers
 
 
@@ -85,17 +85,42 @@ repository, brew formula and minimum version. Release assets are matched by
 platform, so no per-project file names are hardcoded: both spellings of the
 architecture are accepted (`x86_64` and `amd64`), and an asset that is a bare
 binary rather than an archive, which is how Go projects such as `shfmt` publish,
-is installed as it is.
+is installed as it is. A binary inside an archive that carries the platform in
+its name, as gdu's `gdu_linux_amd64` does, is renamed to the command. Where brew
+installs a formula under another name — its `gdu` is `gdu-go`, to stay out of the
+way of coreutils — that name goes in the `TOOL_BREW_BIN` row.
 
 ### Tool config and aliases
 
 When the repo holds a directory named after a tool, `install-tools.sh` installs
-that too: the config files are linked into `$HOME`, the entries of its
-`aliases.sh` are added to a shell startup file, and an executable
-`post-install.sh` runs afterwards (bat uses one to rebuild its theme cache).
+that too: the config files are linked into `$HOME`, its `aliases.sh` is kept in
+your shell startup file, and an executable `post-install.sh` runs afterwards
+(bat uses one to rebuild its theme cache). The `bash` package holds the entries
+that belong to no tool at all — navigation aliases, history settings, a couple of
+functions — and `install.sh` installs those.
 
-An alias or export that is already defined is left alone, so the file never
-overwrites something of yours. The startup file is chosen in this order:
+An `aliases.sh` is kept in a region of the startup file marked like this:
+
+```sh
+# >>> dotfiles: bash shell entries >>>
+...
+# <<< dotfiles: bash shell entries <<<
+```
+
+The file is copied in verbatim, so anything a startup file can hold works:
+aliases, exports, functions, `shopt` and `eval` lines. Rerunning rewrites the
+region instead of appending a second copy, so it is a no-op when nothing changed.
+
+Your own configuration outside the region always wins. Each entry of ours is
+matched against yours by name — the alias name, the variable name whether it is
+exported or not, the function name, or, for a statement such as a `shopt`, the
+command and its arguments:
+
+- you define it exactly as we do: ours is left out, yours already is it
+- you define it differently: ours goes in commented out, so it is there to read
+  and uncomment but changes nothing
+
+The startup file is chosen in this order:
 
 1. `--rc-file FILE`, or the `DOTFILES_RC_FILE` environment variable
 2. a bash startup file that already carries our lines, so nothing is duplicated

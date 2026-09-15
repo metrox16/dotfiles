@@ -27,9 +27,21 @@ Usage: ${0##*/} [options] [package ...]
 Symlinks the files of each package into \$HOME. With no package given, every
 package in the repo is installed.
 
+When a package holds an aliases.sh, it is kept in a marked region of your shell
+startup file: aliases, exports, functions and anything else it contains are
+copied there verbatim, and a rerun rewrites that region rather than appending a
+second copy. An entry you already define the same way is left out, and one you
+define differently goes in commented out, so yours keeps winning.
+
+A package named after a command, such as bat, only gets that treatment once the
+command is installed, since that is install-tools.sh's job; the bash package,
+holding the entries that belong to no tool, is always installed.
+
 Options:
   -n, --dry-run   Show what would happen, change nothing
   -f, --force     Replace existing files without keeping a backup
+      --rc-file FILE      Shell startup file for the aliases.sh entries
+      --no-shell-entries  Do not touch any shell startup file
   -l, --list      List available packages and exit
   -h, --help      Show this help
 
@@ -53,12 +65,18 @@ list_packages() {
 
 dry_run=0
 force=0
+shell_entries=1
 packages=()
 
 while (($# > 0)); do
     case $1 in
         -n | --dry-run) dry_run=1 ;;
         -f | --force) force=1 ;;
+        --no-shell-entries) shell_entries=0 ;;
+        --rc-file)
+            export DOTFILES_RC_FILE=$2
+            shift
+            ;;
         -l | --list)
             list_packages
             exit 0
@@ -130,6 +148,34 @@ link_package() {
     done < <(find "$pkg_dir" -type f -o -type l)
 }
 
+# Add the entries of a package's aliases.sh to a shell startup file, skipping
+# whatever is already defined. The marker is the same one install-tools.sh uses,
+# so the two scripts write to the same place and never duplicate each other.
+#
+# A package named after a command holds that tool's entries, which are useless
+# without it, and in the case of an export such as MANPAGER actively broken, so
+# those are left to install-tools.sh until the command exists. A package that is
+# not a tool, such as bash, carries the common entries and is always installed.
+# Args: package name, absolute package directory
+link_package_shell_entries() {
+    local pkg=$1 pkg_dir=$2 rc
+    local snippet=$pkg_dir/aliases.sh
+    [[ -f $snippet ]] || return 0
+
+    if ! command -v "$pkg" >/dev/null 2>&1; then
+        print_status INFO "$pkg: not installed, its shell entries are left to install-tools.sh"
+        return 0
+    fi
+
+    if ((dry_run)); then
+        print_status INFO "$pkg: would keep aliases.sh in a region of your shell startup file"
+        return 0
+    fi
+
+    rc=$(resolve_rc_file "dotfiles: $pkg shell entries") || return 1
+    install_shell_entries "$snippet" "$rc" "$pkg shell entries"
+}
+
 for pkg in "${packages[@]}"; do
     pkg_dir=$DOTFILES_DIR/$pkg
     if [[ ! -d $pkg_dir ]]; then
@@ -138,6 +184,9 @@ for pkg in "${packages[@]}"; do
         continue
     fi
     link_package "$pkg" "$pkg_dir"
+    if ((shell_entries)); then
+        link_package_shell_entries "$pkg" "$pkg_dir" || failed=1
+    fi
 done
 
 if ((dry_run)); then

@@ -1,0 +1,4 @@
+# Files matching these patterns belong to the repo, not to $HOME, so install.sh
+# does not link them. One glob per line, relative to this package directory.
+aliases.sh
+post-install.sh

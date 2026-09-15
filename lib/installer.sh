@@ -311,82 +311,390 @@ rc_file_usable() {
     fi
 }
 
-# Returns 0 when an alias of this name is already defined, either in the user's
-# interactive shell or written in one of the startup files.
-# Args: alias name
-alias_defined() {
-    local name=$1 candidate
-    bash -ic "alias $name" >/dev/null 2>&1 && return 0
-    while IFS= read -r candidate; do
-        [[ -f $candidate ]] || continue
-        grep -Eq "^[[:space:]]*alias[[:space:]]+$name=" "$candidate" 2>/dev/null && return 0
-    done < <(rc_candidates)
-    return 1
+# Set TRIMMED to a string without its leading and trailing whitespace. A global
+# rather than stdout, because a command substitution forks a process and this
+# runs for every line of every startup file.
+TRIMMED=''
+trim() {
+    local s=$1
+    s=${s#"${s%%[![:space:]]*}"}
+    TRIMMED=${s%"${s##*[![:space:]]}"}
 }
 
-# Returns 0 when a variable is already exported in one of the startup files.
-# Args: variable name
-export_defined() {
-    local name=$1 candidate
-    while IFS= read -r candidate; do
-        [[ -f $candidate ]] || continue
-        grep -Eq "^[[:space:]]*export[[:space:]]+$name=" "$candidate" 2>/dev/null && return 0
-    done < <(rc_candidates)
-    return 1
-}
+# The kinds of entry a shell startup file is made of, matched by name so an entry
+# of ours can be compared with one of yours: an alias, a variable exported or
+# not, a function, and failing that a plain statement such as an eval or a shopt,
+# which is named after the command it runs. A bare NAME=value counts as the same
+# variable as "export NAME=value": being exported is not what tells two
+# definitions of $HISTSIZE apart.
+ENTRY_RE_ALIAS='^[[:space:]]*alias[[:space:]]+([^[:space:]=]+)='
+ENTRY_RE_FUNC='^[[:space:]]*(function[[:space:]]+)?([A-Za-z_][A-Za-z0-9_-]*)[[:space:]]*\(\)'
+ENTRY_RE_EXPORT='^[[:space:]]*(export|declare|typeset)[[:space:]]+(-[A-Za-z]+[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)='
+ENTRY_RE_VAR='^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)='
 
-# Append the entries of a shell snippet to a startup file, skipping the aliases
-# and exports that are already defined so nothing of the user's is overwritten.
-# Comments stay attached to the entry that follows them.
-# Args: snippet path, startup file, label for the generated comment
-install_shell_entries() {
-    local snippet=$1 rc=$2 label=$3 line name added=0
-    local -a pending=() keep=()
+# Set ENTRY_KEY to "alias l", "var HISTSIZE", "function mkcd" or "statement shopt
+# histappend" for a line that defines something, and to nothing for anything
+# else. ENTRY_BLOCK says whether the entry carries on over the following lines,
+# which a function does.
+#
+# The cheap glob tests come first on purpose: this runs for every line of every
+# startup file, and a regex on each of them is what made it slow.
+# Args: a trimmed line, whether a nameless statement counts (default yes)
+ENTRY_KEY=''
+ENTRY_BLOCK=0
+classify_entry() {
+    local line=$1 allow_statement=${2:-1}
+    ENTRY_KEY=''
+    ENTRY_BLOCK=0
 
-    while IFS= read -r line || [[ -n $line ]]; do
+    case $line in
+        alias[[:space:]]*)
+            [[ $line =~ $ENTRY_RE_ALIAS ]] &&
+                # Everything up to the '=' is the name: '..' is a good alias name.
+                ENTRY_KEY="alias ${BASH_REMATCH[1]}"
+            return 0
+            ;;
+        *'()'*)
+            if [[ $line =~ $ENTRY_RE_FUNC ]]; then
+                ENTRY_KEY="function ${BASH_REMATCH[2]}"
+                ENTRY_BLOCK=1
+                return 0
+            fi
+            ;;
+    esac
+
+    if [[ $line == *=* ]]; then
         case $line in
-            '' | '#'*)
-                pending+=("$line")
+            export[[:space:]]* | declare[[:space:]]* | typeset[[:space:]]*)
+                if [[ $line =~ $ENTRY_RE_EXPORT ]]; then
+                    ENTRY_KEY="var ${BASH_REMATCH[3]}"
+                    return 0
+                fi
+                ;;
+        esac
+        if [[ $line =~ $ENTRY_RE_VAR ]]; then
+            ENTRY_KEY="var ${BASH_REMATCH[1]}"
+            return 0
+        fi
+    fi
+
+    # A statement that defines nothing by name: an eval, a shopt, a source, a
+    # set. Its identity is the command with the arguments that are not option
+    # flags, so "shopt -s histappend" and "shopt -u histappend" are two versions
+    # of one entry rather than two unrelated lines, and so is an eval of the same
+    # command with different flags.
+    ((allow_statement)) || return 0
+    local token noglob=0
+    local -a parts=() words=()
+    local IFS=$' \t'
+    [[ -o noglob ]] || noglob=1
+    set -f
+    # Word splitting on purpose, with globbing off for it.
+    # shellcheck disable=SC2206
+    parts=(${line//[\"\'\`;]/})
+    ((noglob)) && set +f
+    for token in "${parts[@]}"; do
+        token=${token//\$(/}
+        token=${token//[()]/}
+        [[ -z $token || $token == -* ]] && continue
+        words+=("$token")
+    done
+    ((${#words[@]} > 0)) && ENTRY_KEY="statement ${words[*]}"
+    return 0
+}
+
+# Returns 0 when a line closes the function being collected: where its braces
+# balance out, or on a closing brace in the first column. Neither test alone is
+# enough - an awk script full of braces defeats the second, a body closed with
+# indentation defeats the first. Quotes are not parsed, so a lone brace inside a
+# string can throw the balance off, which is what the first-column test is for.
+# Args: raw line, trimmed line
+BRACE_DEPTH=0
+ends_function() {
+    local opens=${2//[^\{]/} closes=${2//[^\}]/}
+    BRACE_DEPTH=$((BRACE_DEPTH + ${#opens} - ${#closes}))
+    [[ $1 == '}' ]] && return 0
+    ((BRACE_DEPTH <= 0))
+}
+
+# Keep a snippet in a marked region of a shell startup file. What the snippet
+# holds does not matter - aliases, exports, functions, shopt lines, anything -
+# because it is copied verbatim between the markers. Rerunning is a text
+# comparison: a region that already matches is left alone, and a snippet that has
+# changed replaces its region rather than being appended a second time.
+#
+# Where you already define an entry outside the region:
+#   the same definition, word for word  ours is left out, yours is already it
+#   a different definition              ours goes in commented out, so yours
+#                                       stays in charge and ours is there to
+#                                       compare and uncomment
+#
+# An entry of ours starts in the first column and anything indented is its body,
+# which is what lets a function, an if/for/while/case block or a line left open on
+# a parenthesis be treated as the single entry it is.
+# Args: snippet path, startup file, label used in the markers
+install_shell_entries() {
+    local snippet=$1 rc=$2 label=$3
+    local begin="# >>> dotfiles: $label >>>"
+    local end="# <<< dotfiles: $label <<<"
+    local line candidate content current='' wanted='' tmp verb key block_end
+    local i j n first in_region=0 have_region=0 in_ours=0 entries=0 same=0 clash=0
+    local -a before=() after=() region=() want=() yours=() lines=() block=() pending=() rc_lines=()
+    local -A defined=() stmt_cmds=()
+
+    # The file as it stands, split around the region this manages. mapfile rather
+    # than a read loop: it is a builtin reading the whole file at once, which on a
+    # long startup file is the difference between milliseconds and tens of them.
+    if [[ -f $rc ]]; then
+        mapfile -t rc_lines <"$rc"
+        for line in "${rc_lines[@]}"; do
+            if [[ $line == "$begin" ]]; then
+                in_region=1
+                have_region=1
+                continue
+            fi
+            if ((in_region)); then
+                if [[ $line == "$end" ]]; then
+                    in_region=0
+                else
+                    region+=("$line")
+                fi
+            elif ((have_region)); then
+                after+=("$line")
+            else
+                before+=("$line")
+            fi
+        done
+    fi
+
+    # Half a region means the file was edited by hand into a state where
+    # rewriting it would throw lines away, so nothing is touched.
+    if ((in_region)); then
+        print_status ERR "${rc/#$HOME/~} opens the $label region but never closes it; fix it by hand" >&2
+        return 1
+    fi
+
+    # The snippet first: which commands its nameless statements use decides what
+    # is worth taking apart when indexing your files below, which saves doing that
+    # for hundreds of lines that could never match one of ours.
+    mapfile -t lines <"$snippet"
+    for line in "${lines[@]}"; do
+        [[ -z ${line//[[:space:]]/} || $line == '#'* || $line == [[:space:]]* ]] && continue
+        classify_entry "$line"
+        [[ $ENTRY_KEY == 'statement '* ]] && stmt_cmds[${line%%[[:space:]]*}]=1
+    done
+
+    # Everything the startup files define, our own regions aside: they hold what
+    # we wrote last time, which is not yours to keep.
+    yours=("${before[@]}" "${after[@]}")
+    while IFS= read -r candidate; do
+        [[ $candidate == "$rc" ]] && continue
+        [[ -f $candidate && -r $candidate ]] || continue
+        mapfile -t -O "${#yours[@]}" yours <"$candidate"
+    done < <(rc_candidates)
+
+    n=${#yours[@]}
+    for ((i = 0; i < n; i++)); do
+        line=${yours[i]}
+        # A region of ours in another file, from another package or an earlier
+        # run, is not yours either. The markers are written at column 0, so they
+        # need no trimming.
+        case $line in
+            '# >>> dotfiles: '*)
+                in_ours=1
+                continue
+                ;;
+            '# <<< dotfiles: '*)
+                in_ours=0
                 continue
                 ;;
         esac
+        ((in_ours)) && continue
 
-        name=''
-        if [[ $line =~ ^[[:space:]]*alias[[:space:]]+([A-Za-z0-9_-]+)= ]]; then
-            name=${BASH_REMATCH[1]}
-            if alias_defined "$name"; then
-                print_status OK "alias $name is already defined, leaving it alone"
-                pending=()
-                continue
+        trim "$line"
+        [[ -z $TRIMMED || $TRIMMED == '#'* ]] && continue
+        # A line that defines nothing, of which a startup file is mostly made, is
+        # dropped here rather than in the classifier: skipping the call is what
+        # keeps this quick on a long configuration.
+        case $TRIMMED in
+            *=* | *'()'* | alias[[:space:]]* | export[[:space:]]* | declare[[:space:]]* | typeset[[:space:]]*) ;;
+            *) [[ -n ${stmt_cmds[${TRIMMED%%[[:space:]]*}]:-} ]] || continue ;;
+        esac
+        classify_entry "$TRIMMED" "${stmt_cmds[${TRIMMED%%[[:space:]]*}]:-0}"
+        [[ -n $ENTRY_KEY ]] || continue
+        key=$ENTRY_KEY
+        first=$TRIMMED
+        content=$first
+        if ((ENTRY_BLOCK)); then
+            # A function is one definition, body and all, and the body is not
+            # searched for definitions of its own: an alias set inside a function
+            # is not an alias you have.
+            BRACE_DEPTH=0
+            if ! ends_function "${yours[i]}" "$first"; then
+                while ((i + 1 < n)); do
+                    i=$((i + 1))
+                    trim "${yours[i]}"
+                    content+=$'\n'$TRIMMED
+                    ends_function "${yours[i]}" "$TRIMMED" && break
+                done
             fi
-        elif [[ $line =~ ^[[:space:]]*export[[:space:]]+([A-Za-z0-9_]+)= ]]; then
-            name=${BASH_REMATCH[1]}
-            if export_defined "$name"; then
-                print_status OK "$name is already exported, leaving it alone"
-                pending=()
-                continue
+        else
+            # A control structure, or a line left open on a parenthesis, is
+            # recorded whole too, so one of ours can be compared against all of
+            # it. It is only read ahead, not consumed: what it sets inside still
+            # counts as something you have.
+            block_end=''
+            case $first in
+                *'(') block_end=')' ;;
+                if | if[[:space:]]*) block_end='fi' ;;
+                for[[:space:]]* | while[[:space:]]* | until[[:space:]]*) block_end='done' ;;
+                case[[:space:]]*) block_end='esac' ;;
+            esac
+            [[ -n $block_end && $first == *"$block_end" ]] && block_end=''
+            if [[ -n $block_end ]]; then
+                for ((j = i + 1; j < n; j++)); do
+                    trim "${yours[j]}"
+                    content+=$'\n'$TRIMMED
+                    [[ $TRIMMED == "$block_end" || $TRIMMED == "$block_end;"* ]] && break
+                done
             fi
         fi
+        # A name can be defined more than once, so every definition is kept and
+        # matched as a whole record between the separators. A block counts as its
+        # first line as well, in case ours is only that line.
+        defined[$key]+=$'\x01'$content$'\x01'
+        [[ $content == "$first" ]] || defined[$key]+=$'\x01'$first$'\x01'
+    done
 
-        keep+=("${pending[@]}" "$line")
+    n=${#lines[@]}
+    for ((i = 0; i < n; i++)); do
+        line=${lines[i]}
+        # A comment or a blank line belongs to the entry that follows it, and goes
+        # away with it when that entry turns out to be yours already.
+        if [[ -z ${line//[[:space:]]/} || $line == '#'* ]]; then
+            pending+=("$line")
+            continue
+        fi
+        # An entry of ours starts in the first column, so anything indented is the
+        # body of one and is copied across untouched.
+        if [[ $line == [[:space:]]* ]]; then
+            want+=("${pending[@]}" "$line")
+            pending=()
+            continue
+        fi
+
+        classify_entry "$line"
+        key=$ENTRY_KEY
+        block=("$line")
+        trim "$line"
+        content=$TRIMMED
+
+        # How an entry that spans lines ends. Ours are kept or dropped whole: a
+        # split one leaves an orphaned body behind, and dropping a 'fi' or a ')'
+        # of ours because you happen to have one too would leave your startup
+        # file unable to parse.
+        block_end=''
+        if ((ENTRY_BLOCK)); then
+            block_end='}'
+        elif [[ $TRIMMED == *'(' ]]; then
+            # A line left open on a parenthesis: a command substitution spread
+            # over several lines, as LESS_TERMCAP_mb=$( ... ) is written.
+            block_end=')'
+        else
+            case $TRIMMED in
+                if | if[[:space:]]*) block_end='fi' ;;
+                for[[:space:]]* | while[[:space:]]* | until[[:space:]]*) block_end='done' ;;
+                case[[:space:]]*) block_end='esac' ;;
+            esac
+            # Written on one line, so it is complete already.
+            [[ -n $block_end && $TRIMMED == *"$block_end" ]] && block_end=''
+        fi
+
+        # The line that closes an entry of ours is in the first column and its
+        # body is indented, so a nested 'fi' or '}' does not end it early.
+        if [[ $block_end == '}' ]]; then
+            BRACE_DEPTH=0
+            # A function written on one line is complete already.
+            ends_function "$line" "$TRIMMED" && block_end=''
+        fi
+        while [[ -n $block_end ]] && ((i + 1 < n)); do
+            i=$((i + 1))
+            block+=("${lines[i]}")
+            trim "${lines[i]}"
+            content+=$'\n'$TRIMMED
+            if [[ $block_end == '}' ]]; then
+                ends_function "${lines[i]}" "$TRIMMED" && break
+            else
+                [[ ${lines[i]} == "$block_end" || ${lines[i]} == "$block_end;"* ]] && break
+            fi
+        done
+
+        if [[ -n $key && -n ${defined[$key]:-} ]]; then
+            if [[ ${defined[$key]} == *$'\x01'"$content"$'\x01'* ]]; then
+                same=$((same + 1))
+                pending=()
+                continue
+            fi
+            clash=$((clash + 1))
+            want+=("${pending[@]}" "# your own $key differs, so ours is left here commented out:")
+            pending=()
+            for candidate in "${block[@]}"; do
+                want+=("#${candidate:+ }$candidate")
+            done
+            continue
+        fi
+
+        want+=("${pending[@]}" "${block[@]}")
         pending=()
-        added=$((added + 1))
-        [[ -n $name ]] && print_status DONE "Adding $name to ${rc/#$HOME/~}"
-    done <"$snippet"
+        entries=$((entries + 1))
+    done
 
-    if ((added == 0)); then
-        print_status OK "Nothing new to add to ${rc/#$HOME/~} from ${snippet##*/}"
+    # A first entry that turned out to be yours takes its comment with it and can
+    # leave the region starting on a blank line.
+    while ((${#want[@]} > 0)) && [[ -z ${want[0]//[[:space:]]/} ]]; do
+        want=("${want[@]:1}")
+    done
+
+    # Nothing of the snippet is left to install, so no region of leftover
+    # comments is created either.
+    if ((entries == 0 && clash == 0 && !have_region)); then
+        print_status OK "${snippet##*/}: all $same entries are already yours, nothing to add"
         return 0
     fi
 
+    ((${#region[@]} > 0)) && printf -v current '%s\n' "${region[@]}"
+    ((${#want[@]} > 0)) && printf -v wanted '%s\n' "${want[@]}"
+
+    if ((have_region)) && [[ $current == "$wanted" ]]; then
+        print_status OK "${rc/#$HOME/~} already carries the $label region"
+        return 0
+    fi
+
+    # Written next to the file and then copied over it, rather than moved into
+    # place: that keeps the inode, so a startup file that is a symlink stays one.
+    tmp=$rc.dotfiles-new
     if ! {
-        printf '\n# dotfiles: %s\n' "$label"
-        printf '%s\n' "${keep[@]}"
-    } >>"$rc"; then
-        print_status ERR "Could not write to ${rc/#$HOME/~}" >&2
+        if ((${#before[@]} > 0)); then
+            printf '%s\n' "${before[@]}"
+            # A blank line before the marker, unless there is one already.
+            [[ -n ${before[${#before[@]}-1]} ]] && printf '\n'
+        fi
+        printf '%s\n' "$begin"
+        printf '%s' "$wanted"
+        printf '%s\n' "$end"
+        if ((${#after[@]} > 0)); then printf '%s\n' "${after[@]}"; fi
+    } >"$tmp"; then
+        print_status ERR "Could not write ${tmp/#$HOME/~}" >&2
         return 1
     fi
-    print_status DONE "Wrote $added new entries to ${rc/#$HOME/~}"
+    if ! cat -- "$tmp" >"$rc"; then
+        print_status ERR "Could not write ${rc/#$HOME/~}, the new version is at ${tmp/#$HOME/~}" >&2
+        return 1
+    fi
+    rm -f -- "$tmp"
+
+    ((have_region)) && verb=Updated || verb=Added
+    print_status DONE "$verb the $label region in ${rc/#$HOME/~}: $entries entries, $same already yours, $clash commented out where yours differs"
     return 0
 }
 
@@ -626,11 +934,14 @@ extract_archive() {
 
 # Print the path of an executable inside an unpacked archive. Some projects put
 # the binary in a versioned subdirectory, others at the top level, so it is
-# searched for rather than assumed.
+# searched for rather than assumed. A name with the platform appended counts too,
+# which is how gdu ships: gdu_linux_amd64.
 # Args: directory, binary name
 find_binary_in() {
     local dir=$1 name=$2 found
     found=$(find "$dir" -type f -name "$name" -perm -u+x -print 2>/dev/null | head -1)
+    [[ -n $found ]] ||
+        found=$(find "$dir" -type f -name "${name}[_-]*" -perm -u+x -print 2>/dev/null | head -1)
     [[ -n $found ]] || return 1
     printf '%s\n' "$found"
 }

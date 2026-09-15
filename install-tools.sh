@@ -29,6 +29,8 @@ declare -A TOOL_REPO=(
     [rg]=BurntSushi/ripgrep
     [eza]=eza-community/eza
     [shfmt]=mvdan/sh
+    [gdu]=dundee/gdu
+    [zoxide]=ajeetdsouza/zoxide
 )
 declare -A TOOL_BREW=(
     [bat]=bat
@@ -36,6 +38,13 @@ declare -A TOOL_BREW=(
     [rg]=ripgrep
     [eza]=eza
     [shfmt]=shfmt
+    [gdu]=gdu
+    [zoxide]=zoxide
+)
+# Where brew installs a formula's binary under another name, to keep out of the
+# way of something else: brew's gdu is gdu-go, because coreutils ships a gdu.
+declare -A TOOL_BREW_BIN=(
+    [gdu]=gdu-go
 )
 declare -A TOOL_MIN=(
     [bat]=0.24.0
@@ -43,6 +52,8 @@ declare -A TOOL_MIN=(
     [rg]=14.0.0
     [eza]=0.18.0
     [shfmt]=3.7.0
+    [gdu]=5.20.0
+    [zoxide]=0.9.0
 )
 # Names people type that are not the command name.
 declare -A TOOL_ALIAS=(
@@ -50,6 +61,7 @@ declare -A TOOL_ALIAS=(
     [batcat]=bat
     [fdfind]=fd
     [sh]=shfmt
+    [gdu-go]=gdu
 )
 
 INSTALL_ROOT=${TOOLS_INSTALL_ROOT:-$HOME/.local/opt}
@@ -78,9 +90,11 @@ $INSTALL_BIN_DIR is put ahead on PATH in your shell startup file so that
 version is the one that runs.
 
 When the repo holds a directory named after a tool, its config files are linked
-into \$HOME as well (a previous real file is kept as <name>.old) and the entries
-of its aliases.sh are added to your shell startup file. An alias or export you
-already have is never touched.
+into \$HOME as well (a previous real file is kept as <name>.old) and its
+aliases.sh is kept in a marked region of your shell startup file, whatever it
+contains: aliases, exports, functions, plain statements. An entry you already
+define the same way is left out, one you define differently goes in commented
+out, and a rerun rewrites the region instead of appending to it.
 
 The startup file is chosen in this order: --rc-file or DOTFILES_RC_FILE, then a
 file that already carries our lines, then ~/.bashrc on Linux and
@@ -208,9 +222,17 @@ install_tool_via_brew() {
     fi
 
     # The exit status of brew is not conclusive (an already current formula is
-    # an "error" for some versions), so the resulting binary is what counts.
-    for candidate in "$("$brew" --prefix "$formula" 2>/dev/null)/bin/$name" \
-        "$("$brew" --prefix 2>/dev/null)/bin/$name"; do
+    # an "error" for some versions), so the resulting binary is what counts. A
+    # formula may install it under another name, which TOOL_BREW_BIN carries.
+    local brew_bin=${TOOL_BREW_BIN[$1]:-$name} prefix
+    local -a candidates=()
+    for prefix in "$("$brew" --prefix "$formula" 2>/dev/null)" "$("$brew" --prefix 2>/dev/null)"; do
+        [[ -n $prefix ]] || continue
+        candidates+=("$prefix/bin/$brew_bin")
+        [[ $brew_bin == "$name" ]] || candidates+=("$prefix/bin/$name")
+    done
+
+    for candidate in "${candidates[@]}"; do
         if version=$(tool_version "$candidate"); then
             install_target=$candidate
             break
@@ -269,6 +291,14 @@ install_tool_via_release() {
     if ! binary=$(find_binary_in "$payload" "$name"); then
         print_status ERR "No $name binary inside $asset" >&2
         return 1
+    fi
+
+    # Some releases name the binary after the platform rather than the command,
+    # gdu shipping gdu_linux_amd64, so it is renamed here and everything below,
+    # including what ends up on PATH, is plain "$name".
+    if [[ ${binary##*/} != "$name" ]]; then
+        mv -- "$binary" "${binary%/*}/$name" || return 1
+        binary=${binary%/*}/$name
     fi
 
     # Check it runs before it is put anywhere, since a prebuilt binary can
@@ -367,7 +397,7 @@ install_tool_extras() {
             print_status INFO "$name: would link ~/$rel"
         done < <(find "$pkg" -type f -o -type l)
         [[ -n $snippet ]] &&
-            print_status INFO "$name: would add the missing entries of aliases.sh to your shell startup file"
+            print_status INFO "$name: would keep aliases.sh in a region of your shell startup file"
         return 0
     fi
 

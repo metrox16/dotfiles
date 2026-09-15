@@ -436,6 +436,17 @@ link_config_file() {
     print_status DONE "$rel -> $src"
 }
 
+# Put $INSTALL_BIN_DIR on this process's PATH, so the steps that follow, and the
+# programs they start, find what was just installed. Future shells are a
+# separate matter, handled by ensure_path_priority.
+prepend_install_bin_dir() {
+    case ":$PATH:" in
+        *":$INSTALL_BIN_DIR:"*) ;;
+        *) export PATH="$INSTALL_BIN_DIR:$PATH" ;;
+    esac
+    hash -r 2>/dev/null
+}
+
 # Put $INSTALL_BIN_DIR ahead of everything else on PATH, in this process and in
 # future shells. Installing a newer tool is not enough when an older one sits
 # earlier on PATH, which is the usual case for a system package in /usr/bin.
@@ -471,11 +482,7 @@ ensure_path_priority() {
     fi
 
     # Fix this process too, so later steps already use the new binaries.
-    case ":$PATH:" in
-        *":$INSTALL_BIN_DIR:"*) ;;
-        *) export PATH="$INSTALL_BIN_DIR:$PATH" ;;
-    esac
-    hash -r 2>/dev/null
+    prepend_install_bin_dir
     print_status INFO "Open a new shell, or source your rc file, for this to apply to the current one"
 }
 
@@ -564,6 +571,22 @@ extract_archive() {
         *.tar.xz) tar xJf "$archive" -C "$dest" ;;
         *.tar.bz2) tar xjf "$archive" -C "$dest" ;;
         *.tar) tar xf "$archive" -C "$dest" ;;
+        *.gz)
+            # A bare .gz is one compressed file rather than an archive, which is
+            # how some projects ship a single binary. tar cannot unpack it, and
+            # the result keeps the name without the suffix. Executability is the
+            # caller's business, since a .gz need not hold a program.
+            local out=${archive##*/}
+            out=$dest/${out%.gz}
+            if command -v gzip >/dev/null 2>&1; then
+                gzip -dc -- "$archive" >"$out"
+            elif command -v gunzip >/dev/null 2>&1; then
+                gunzip -c -- "$archive" >"$out"
+            else
+                print_status ERR "gzip is needed for $archive" >&2
+                return 1
+            fi
+            ;;
         *.zip)
             if command -v unzip >/dev/null 2>&1; then
                 unzip -q -o "$archive" -d "$dest"

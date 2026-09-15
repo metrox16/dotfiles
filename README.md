@@ -42,6 +42,14 @@ tree-sitter parsers. `install-tools.sh` sets up the command line tools. Neither
 needs root, and both want bash 4 or newer — macOS still ships 3.2 as
 `/bin/bash`, so install a current bash there first.
 
+Parsers are the one step with prerequisites the scripts cannot always satisfy:
+nvim-treesitter builds each parser by calling the `tree-sitter` CLI, which in
+turn compiles C, so a compiler has to be present and the CLI is installed
+alongside Neovim. Its official builds need a recent glibc, so on an older
+distribution get it from brew, `cargo install tree-sitter-cli` or a distro
+package. Without either prerequisite the parsers are skipped, with a warning,
+and everything else still works.
+
 ```sh
 ./install-nvim.sh          # Neovim and its plugins
 ./install-tools.sh         # every tool

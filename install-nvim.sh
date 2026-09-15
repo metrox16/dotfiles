@@ -23,6 +23,13 @@ source "$DOTFILES_DIR/lib/installer.sh" || {
 readonly RELEASES_URL="https://github.com/neovim/neovim/releases"
 readonly NVIM_REPO="neovim/neovim"
 readonly PLUG_URL="https://raw.githubusercontent.com/junegunn/vim-plug/master/plug.vim"
+readonly TS_CLI_REPO="tree-sitter/tree-sitter"
+readonly TS_CLI_RELEASES="https://github.com/$TS_CLI_REPO/releases"
+
+# nvim-treesitter's main branch does not compile parsers itself, it calls the
+# tree-sitter CLI to do it, so the CLI is as much a prerequisite as the C
+# compiler and gets installed here rather than being expected on the machine.
+MIN_TS_CLI_VERSION=${MIN_TS_CLI_VERSION:-0.25.0}
 
 # An already installed Neovim at least this new is left alone; anything older
 # is replaced with the latest release. 0.11 is the floor because the config
@@ -56,7 +63,10 @@ Steps:
   2. PATH        $INSTALL_BIN_DIR/nvim points at the winner, $INSTALL_BIN_DIR first
   3. vim-plug    the plugin manager init.vim expects
   4. plugins     :PlugInstall for everything in the config
-  5. parsers     the tree-sitter parsers the config asks for
+  5. parsers     the tree-sitter CLI, then the parsers the config asks for.
+                 nvim-treesitter builds parsers by calling that CLI, so both it
+                 and a C compiler have to be there; without a compiler the step
+                 is skipped with a warning.
 
 Re-running is safe.
 
@@ -302,6 +312,142 @@ install_nvim() {
     esac
 }
 
+# Print the release asset holding the tree-sitter CLI for this OS and
+# architecture. The CLI ships each build as a single gzipped binary and names
+# them in its own style ("x64", not "x86_64"), so the names are listed instead
+# of derived by pick_asset. The 32 bit x86 builds are deliberately not here.
+ts_cli_asset() {
+    local os arch
+    os=$(uname -s)
+    arch=$(uname -m)
+
+    case $os in
+        Linux)
+            case $arch in
+                x86_64 | amd64) printf '%s\n' tree-sitter-linux-x64.gz ;;
+                aarch64 | arm64) printf '%s\n' tree-sitter-linux-arm64.gz ;;
+                *) return 1 ;;
+            esac
+            ;;
+        Darwin)
+            case $arch in
+                x86_64) printf '%s\n' tree-sitter-macos-x64.gz ;;
+                arm64) printf '%s\n' tree-sitter-macos-arm64.gz ;;
+                *) return 1 ;;
+            esac
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+# Install the tree-sitter CLI with brew and print the resulting binary. Progress
+# goes to stderr, because stdout is the return value here.
+# Args: path to brew
+install_ts_cli_via_brew() {
+    local brew=$1 candidate version
+    if "$brew" list --versions tree-sitter >/dev/null 2>&1; then
+        print_status INFO "Upgrading the tree-sitter CLI with brew" >&2
+        "$brew" upgrade tree-sitter >/dev/null 2>&1
+    else
+        print_status INFO "Installing the tree-sitter CLI with brew" >&2
+        "$brew" install tree-sitter >/dev/null 2>&1
+    fi
+
+    # As elsewhere, brew's exit status is not conclusive, so the binary decides.
+    for candidate in "$("$brew" --prefix tree-sitter 2>/dev/null)/bin/tree-sitter" \
+        "$("$brew" --prefix 2>/dev/null)/bin/tree-sitter"; do
+        if version=$(tool_version "$candidate"); then
+            print_status DONE "Installed the tree-sitter CLI $version with brew" >&2
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Download the tree-sitter CLI release and print where it ended up. The payload
+# is a lone binary, so it gets the same versioned directory and "current"
+# symlink treatment as everything else, next to the Neovim versions.
+install_ts_cli_via_release() {
+    local asset tag tmp archive payload binary version root dest
+    if ! asset=$(ts_cli_asset); then
+        print_status WARN "No prebuilt tree-sitter CLI for $(uname -s)/$(uname -m)" >&2
+        return 1
+    fi
+
+    tag=$(github_latest_tag "$TS_CLI_REPO")
+    tmp=$(mktemp -d) || return 1
+    # shellcheck disable=SC2064
+    trap "rm -rf -- '$tmp'" RETURN
+
+    archive=$tmp/$asset
+    print_status INFO "Fetching $asset ${tag:+($tag)}" >&2
+    if ! fetch "$TS_CLI_RELEASES/latest/download/$asset" "$archive"; then
+        print_status ERR "Could not download the tree-sitter CLI" >&2
+        return 1
+    fi
+
+    payload=$tmp/payload
+    extract_archive "$archive" "$payload" >&2 || return 1
+    binary=$payload/${asset%.gz}
+    if ! chmod +x -- "$binary" 2>/dev/null; then
+        print_status ERR "No tree-sitter binary inside $asset" >&2
+        return 1
+    fi
+    if ! version=$(tool_version "$binary"); then
+        print_status ERR "The downloaded tree-sitter CLI does not run on this system" >&2
+        print_status ERR "Its official builds are linked against a recent glibc; check yours with 'ldd --version'" >&2
+        print_status INFO "Ways around it: brew, 'cargo install tree-sitter-cli', or a distro package" >&2
+        return 1
+    fi
+
+    # ${install_root%/*} is the directory holding the per-tool trees, so
+    # --prefix moves the CLI along with Neovim.
+    root=${install_root%/*}/tree-sitter
+    dest=$root/$version
+    mkdir -p "$dest" || return 1
+    if ! mv -f -- "$binary" "$dest/tree-sitter"; then
+        print_status ERR "Cannot move the tree-sitter CLI into $root" >&2
+        return 1
+    fi
+    ln -sfn -- "$version" "$root/current" || return 1
+
+    print_status DONE "Installed the tree-sitter CLI $version from $TS_CLI_REPO" >&2
+    printf '%s\n' "$root/current/tree-sitter"
+}
+
+# Make sure a tree-sitter CLI new enough for nvim-treesitter is installed, is
+# the one PATH picks and is visible to the headless nvim started below.
+# Returns 1 when there is none and none could be installed.
+ensure_ts_cli() {
+    local newest version path='' brew
+    if newest=$(newest_binary tree-sitter) && ((!force)); then
+        version=${newest%% *}
+        if version_ge "$version" "$MIN_TS_CLI_VERSION"; then
+            print_status OK "tree-sitter CLI $version at ${newest#* } is new enough (>= $MIN_TS_CLI_VERSION)"
+            path=${newest#* }
+        else
+            print_status INFO "tree-sitter CLI is only $version (< $MIN_TS_CLI_VERSION), installing the latest"
+        fi
+    fi
+
+    if [[ -z $path ]]; then
+        if [[ $method != release ]]; then
+            brew=$(find_brew)
+            if [[ -n $brew ]]; then
+                path=$(install_ts_cli_via_brew "$brew") ||
+                    print_status WARN "brew did not produce a working tree-sitter CLI, trying the release"
+            fi
+        fi
+        [[ -n $path ]] || path=$(install_ts_cli_via_release) || return 1
+    fi
+
+    link_bin "$path" tree-sitter || return 1
+    # The parser step runs nvim, which looks the CLI up on PATH, so this process
+    # needs the link directory even when the rc file is left alone.
+    prepend_install_bin_dir
+}
+
 # Fetch vim-plug into the autoload directory init.vim expects.
 install_plug() {
     local plug_path="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/site/autoload/plug.vim"
@@ -387,10 +533,21 @@ install_plug || failed=1
 
 run_headless "Installing plugins" "+PlugInstall --sync" +qa || failed=1
 
+parsers_skipped=0
+
 if ((skip_parsers)); then
     print_status INFO "Skipping the tree-sitter step"
+    parsers_skipped=1
 elif ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1; then
+    # Checked before the CLI is fetched: the CLI compiles each parser with the
+    # system compiler, so without one there is no point downloading it.
     print_status WARN "No C compiler found, skipping tree-sitter parsers"
+    print_status INFO "Install a compiler (gcc or clang) and rerun to get them"
+    parsers_skipped=1
+elif ! ensure_ts_cli; then
+    print_status WARN "No usable tree-sitter CLI, skipping the parsers"
+    print_status INFO "nvim-treesitter builds parsers by calling the CLI, so it cannot work without one"
+    parsers_skipped=1
 else
     # The language list lives in the nvim config and is exported as
     # vim.g.ts_languages, so it is not duplicated here.
@@ -412,6 +569,8 @@ fi
 
 if ((failed)); then
     print_status ERR "Finished with errors" >&2
+elif ((parsers_skipped)); then
+    print_status WARN "Neovim is ready at $(resolve_nvim_cmd), but without tree-sitter parsers"
 else
     print_status DONE "Neovim is ready: $(resolve_nvim_cmd)"
 fi

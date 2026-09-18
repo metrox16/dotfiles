@@ -443,9 +443,9 @@ install_shell_entries() {
     local snippet=$1 rc=$2 label=$3
     local begin="# >>> dotfiles: $label >>>"
     local end="# <<< dotfiles: $label <<<"
-    local line candidate content current='' wanted='' tmp verb key block_end
-    local i j n first in_region=0 have_region=0 in_ours=0 entries=0 same=0 clash=0
-    local -a before=() after=() region=() want=() yours=() lines=() block=() pending=() rc_lines=()
+    local line candidate content current='' wanted='' tmp verb key block_end override extra=''
+    local i j n first in_region=0 have_region=0 in_ours=0 entries=0 same=0 clash=0 forced=0
+    local -a before=() after=() region=() want=() yours=() lines=() block=() pending=() rc_lines=() kept=()
     local -A defined=() stmt_cmds=()
 
     # The file as it stands, split around the region this manages. mapfile rather
@@ -595,6 +595,27 @@ install_shell_entries() {
         trim "$line"
         content=$TRIMMED
 
+        # A "# dotfiles: override" line among the comments above an entry says
+        # ours wins where you define the same thing differently, instead of going
+        # in commented out. It is a directive rather than a comment, so it is not
+        # copied into your startup file.
+        override=0
+        if ((${#pending[@]} > 0)); then
+            kept=()
+            for candidate in "${pending[@]}"; do
+                trim "$candidate"
+                case $TRIMMED in
+                    '# dotfiles: override' | '# dotfiles: override'[[:space:]]* | \
+                        '#dotfiles: override' | '#dotfiles: override'[[:space:]]*)
+                        override=1
+                        continue
+                        ;;
+                esac
+                kept+=("$candidate")
+            done
+            pending=("${kept[@]}")
+        fi
+
         # How an entry that spans lines ends. Ours are kept or dropped whole: a
         # split one leaves an orphaned body behind, and dropping a 'fi' or a ')'
         # of ours because you happen to have one too would leave your startup
@@ -639,6 +660,16 @@ install_shell_entries() {
             if [[ ${defined[$key]} == *$'\x01'"$content"$'\x01'* ]]; then
                 same=$((same + 1))
                 pending=()
+                continue
+            fi
+            if ((override)); then
+                # Marked to win, so it goes in as it is. It works because this
+                # region is read after your own definition, which the later
+                # assignment then replaces.
+                forced=$((forced + 1))
+                want+=("${pending[@]}" "# overrides your own $key" "${block[@]}")
+                pending=()
+                entries=$((entries + 1))
                 continue
             fi
             clash=$((clash + 1))
@@ -700,7 +731,8 @@ install_shell_entries() {
     rm -f -- "$tmp"
 
     ((have_region)) && verb=Updated || verb=Added
-    print_status DONE "$verb the $label region in ${rc/#$HOME/~}: $entries entries, $same already yours, $clash commented out where yours differs"
+    ((forced > 0)) && extra=", $forced overriding yours"
+    print_status DONE "$verb the $label region in ${rc/#$HOME/~}: $entries entries, $same already yours, $clash commented out where yours differs$extra"
     return 0
 }
 
@@ -813,32 +845,86 @@ prepend_install_bin_dir() {
 # One PATH entry covers every tool, so a single marked line is written.
 # Args: command name to report on (optional)
 ensure_path_priority() {
-    local name=${1:-} first rc
+    local name=${1:-} first rc tmp candidate export_line current='' wanted verb
     local marker="# dotfiles: keep $INSTALL_BIN_DIR ahead of older tools on PATH"
+    local i n line had=0
+    local -a rc_lines=() rest=() want=()
+
+    # $PATH must stay literal: it is expanded when the rc file runs.
+    # shellcheck disable=SC2016
+    printf -v export_line 'export PATH="%s:$PATH"' "$INSTALL_BIN_DIR"
+
+    # A block from an earlier run is looked for before anything else, because the
+    # test below cannot see the case this function exists to fix: a block written
+    # underneath lines that use the tools leaves PATH right by the time the shell
+    # is idle and wrong while the startup file is still running.
+    while IFS= read -r candidate; do
+        if [[ -f $candidate ]] && grep -qF "$marker" "$candidate" 2>/dev/null; then
+            had=1
+            break
+        fi
+    done < <(
+        [[ -n ${DOTFILES_RC_FILE:-} ]] && printf '%s\n' "$DOTFILES_RC_FILE"
+        rc_candidates
+    )
 
     if [[ -n $name ]]; then
         first=$(type -aP "$name" 2>/dev/null | head -1)
         if [[ $first == "$INSTALL_BIN_DIR/$name" ]]; then
             print_status OK "PATH already prefers $INSTALL_BIN_DIR/$name"
-            return 0
+            ((had)) || return 0
+        else
+            print_status WARN "PATH prefers ${first:-nothing} over $INSTALL_BIN_DIR/$name"
         fi
-        print_status WARN "PATH prefers ${first:-nothing} over $INSTALL_BIN_DIR/$name"
     fi
 
     rc=$(resolve_rc_file "$marker") || return 1
+    [[ -f $rc ]] && mapfile -t rc_lines <"$rc"
 
-    if [[ -f $rc ]] && grep -qF "$marker" "$rc" 2>/dev/null; then
-        print_status OK "${rc/#$HOME/~} already carries the PATH fix"
-    elif {
-        printf '\n%s\n' "$marker"
-        # $PATH must stay literal: it is expanded when the rc file runs.
-        # shellcheck disable=SC2016
-        printf 'export PATH="%s:$PATH"\n' "$INSTALL_BIN_DIR"
-    } >>"$rc"; then
-        print_status DONE "Added the PATH fix to ${rc/#$HOME/~}"
+    # The file without our block, so the block can be put back at the top. It
+    # goes there rather than at the end because everything the startup file does
+    # after it - a completion, a `zoxide init`, a tool of ours called outright -
+    # has to see the new binaries, and a line at the end is too late for all of it.
+    n=${#rc_lines[@]}
+    for ((i = 0; i < n; i++)); do
+        line=${rc_lines[i]}
+        if [[ $line != "$marker" ]]; then
+            rest+=("$line")
+            continue
+        fi
+        # The blank line that separates the block from what is above it is ours
+        # too, so moving the block does not leave a gap behind.
+        if ((${#rest[@]} > 0)) && [[ -z ${rest[${#rest[@]}-1]//[[:space:]]/} ]]; then
+            rest=("${rest[@]:0:${#rest[@]}-1}")
+        fi
+        [[ ${rc_lines[i+1]:-} == "$export_line" ]] && i=$((i + 1))
+    done
+
+    want=("$marker" "$export_line")
+    # One blank line between the block and the file, unless there is one already.
+    ((${#rest[@]} > 0)) && [[ -n ${rest[0]//[[:space:]]/} ]] && want+=('')
+    want+=("${rest[@]}")
+
+    ((n > 0)) && printf -v current '%s\n' "${rc_lines[@]}"
+    printf -v wanted '%s\n' "${want[@]}"
+
+    if [[ $current == "$wanted" ]]; then
+        print_status OK "${rc/#$HOME/~} already carries the PATH fix at the top"
     else
-        print_status ERR "Could not update ${rc/#$HOME/~}" >&2
-        return 1
+        # Written next to the file and then copied over it, so a startup file that
+        # is a symlink stays one.
+        tmp=$rc.dotfiles-new
+        if ! printf '%s\n' "${want[@]}" >"$tmp"; then
+            print_status ERR "Could not write ${tmp/#$HOME/~}" >&2
+            return 1
+        fi
+        if ! cat -- "$tmp" >"$rc"; then
+            print_status ERR "Could not write ${rc/#$HOME/~}, the new version is at ${tmp/#$HOME/~}" >&2
+            return 1
+        fi
+        rm -f -- "$tmp"
+        ((had)) && verb='Moved the PATH fix to the top of' || verb='Added the PATH fix to'
+        print_status DONE "$verb ${rc/#$HOME/~}"
     fi
 
     # Fix this process too, so later steps already use the new binaries.

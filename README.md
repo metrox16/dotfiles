@@ -141,6 +141,21 @@ command and its arguments:
 - you define it differently: ours goes in commented out, so it is there to read
   and uncomment but changes nothing
 
+An entry that should win anyway says so in the `aliases.sh`, with a directive
+among the comments above it:
+
+```sh
+# dotfiles: override
+alias l='eza -laahg --icons=auto -s.name'
+```
+
+Then a differing definition of yours is no longer what decides: ours goes in
+uncommented, with `# overrides your own alias l` above it so the region says what
+happened. It works because the region is read after your own line and the later
+definition is the one that sticks, so the directive has no effect on a definition
+in a file that runs after this one. The directive itself is not copied into the
+startup file.
+
 The startup file is chosen in this order:
 
 1. `--rc-file FILE`, or the `DOTFILES_RC_FILE` environment variable
@@ -154,8 +169,12 @@ fallback and say so.
 
 Because several versions of a tool can sit on PATH with an old one first, both
 scripts compare all of them, link the newest into `~/.local/bin` and add a PATH
-line to the same startup file so that version is the one that runs. The line is
-marked and only added once; `--no-path-setup` disables it.
+line to the same startup file so that version is the one that runs. That line
+goes to the top of the file, above everything else: a startup file usually runs
+some of these tools itself — a `zoxide init`, a completion, an alias expanded on
+the spot — and a PATH line at the end would come too late for all of it. The line
+is marked and only added once, and a line an earlier version of these scripts
+appended at the end is moved up; `--no-path-setup` disables it.
 
 ### Shared shell code
 

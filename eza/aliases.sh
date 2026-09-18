@@ -3,6 +3,7 @@
 # and one you define differently goes in commented out.
 
 # Long listing of everything, grouped, sorted by name.
+# dotfiles: override
 alias l='eza -laahg --icons=auto -s.name'
 
 # Same but sorted by modification time.

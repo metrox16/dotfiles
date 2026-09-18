@@ -589,16 +589,11 @@ install_shell_entries() {
             continue
         fi
 
-        classify_entry "$line"
-        key=$ENTRY_KEY
-        block=("$line")
-        trim "$line"
-        content=$TRIMMED
-
         # A "# dotfiles: override" line among the comments above an entry says
         # ours wins where you define the same thing differently, instead of going
         # in commented out. It is a directive rather than a comment, so it is not
-        # copied into your startup file.
+        # copied into your startup file. This runs before the entry itself is
+        # trimmed, because trim writes the $TRIMMED the code below reads.
         override=0
         if ((${#pending[@]} > 0)); then
             kept=()
@@ -615,6 +610,12 @@ install_shell_entries() {
             done
             pending=("${kept[@]}")
         fi
+
+        classify_entry "$line"
+        key=$ENTRY_KEY
+        block=("$line")
+        trim "$line"
+        content=$TRIMMED
 
         # How an entry that spans lines ends. Ours are kept or dropped whole: a
         # split one leaves an orphaned body behind, and dropping a 'fi' or a ')'
@@ -685,6 +686,17 @@ install_shell_entries() {
         pending=()
         entries=$((entries + 1))
     done
+
+    # Comments at the end of the snippet, with no entry under them to take them
+    # along: they are ours to pass on all the same, which is how a suggestion left
+    # commented out for you to uncomment gets there. The blank lines around them
+    # are not worth keeping.
+    for ((j = ${#pending[@]} - 1; j >= 0; j--)); do
+        [[ -n ${pending[j]//[[:space:]]/} ]] && break
+        pending=("${pending[@]:0:j}")
+    done
+    ((${#pending[@]} > 0)) && want+=("${pending[@]}")
+    pending=()
 
     # A first entry that turned out to be yours takes its comment with it and can
     # leave the region starting on a blank line.

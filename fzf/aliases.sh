@@ -3,7 +3,7 @@
 # and one you define differently goes in commented out.
 
 # A window that does not take over the terminal, and the newest match on top.
-export FZF_DEFAULT_OPTS='--height 40% --layout=reverse --border --info=inline'
+#export FZF_DEFAULT_OPTS='--height 40% --layout=reverse --border --info=inline'
 
 # Let fd walk the tree when it is there: it is quicker and skips .git and what
 # .gitignore hides, which is almost always what you want in a picker.

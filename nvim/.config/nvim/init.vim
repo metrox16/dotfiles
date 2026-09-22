@@ -6,6 +6,7 @@ Plug 'OXY2DEV/markview.nvim'
 Plug 'nvim-lua/plenary.nvim'
 Plug 'folke/todo-comments.nvim'
 Plug 'tomasiser/vim-code-dark'
+Plug 'neovim/nvim-lspconfig'
 call plug#end()
 
 set termguicolors
@@ -31,6 +32,7 @@ set background=dark
 silent! colorscheme codedark
 
 luafile ~/.config/nvim/plugins.lua
+luafile ~/.config/nvim/lsp.lua
 luafile ~/.config/nvim/format.lua
 
 " :Format is the real command (Vim requires a capital); allow typing :format too

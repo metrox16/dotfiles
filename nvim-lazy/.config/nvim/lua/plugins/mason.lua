@@ -84,6 +84,9 @@ local server_needs = {
   gopls = { bin = "gopls", needs = "go" },
   r_language_server = { bin = "R", needs = "R" },
   ruby_lsp = { bin = "ruby-lsp", needs = "gem_native" },
+  -- LazyVim's Ruby extra runs rubocop as a language server as well as a
+  -- formatter, so Mason installs it through the server list, not the tool list.
+  rubocop = { bin = "rubocop", needs = "gem_native" },
 }
 
 return {

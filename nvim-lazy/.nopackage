@@ -1,0 +1,5 @@
+Marker file: this package is installed by install-lazy.sh, not by a bulk run.
+install.sh skips any directory containing a .nopackage file, which is what keeps
+this package and the nvim package from both writing ~/.config/nvim during
+"./install.sh" with no arguments. Naming it still works: "./install.sh nvim-lazy"
+links the files without the backup step that install-lazy.sh does first.

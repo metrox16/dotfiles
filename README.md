@@ -23,6 +23,8 @@ cd dotfiles
 ./install-tools.sh    # 2. bat, fd, rg, eza, shfmt, gdu, zoxide, fzf + aliases + PATH
 ./install-nvim.sh     # 3. Neovim, vim-plug, plugins, tree-sitter parsers
 
+./install-lazy.sh     # optional: swap the nvim config for the LazyVim one
+
 
 ./install.sh              # install every package
 ./install.sh <package>    # install one package
@@ -107,6 +109,36 @@ is installed as it is. A binary inside an archive that carries the platform in
 its name, as gdu's `gdu_linux_amd64` does, is renamed to the command. Where brew
 installs a formula under another name — its `gdu` is `gdu-go`, to stay out of the
 way of coreutils — that name goes in the `TOOL_BREW_BIN` row.
+
+### The LazyVim config
+
+Two Neovim configs live here: `nvim`, the hand written one built on vim-plug,
+and `nvim-lazy`, the same setup rebuilt on LazyVim. Both install to
+`~/.config/nvim`, so `nvim-lazy` carries a `.nopackage` marker and stays out of
+a bare `./install.sh` run. `./install-lazy.sh` is how it goes in:
+
+```sh
+./install-lazy.sh                 # back up, link, install plugins and parsers
+./install-lazy.sh -n              # dry run
+./install-lazy.sh -c              # copy the config instead of linking it
+./install-lazy.sh --skip-plugins  # link the files only
+```
+
+The config that is in `~/.config/nvim` at the time is saved as
+`~/.config/nvim.bak`, and an earlier backup moves one generation down to
+`~/.config/nvim.bak.old` unless `--force` drops it. Going back to the old config
+is a move, and its plugins are still in place because nothing under
+`~/.local/share/nvim` is touched:
+
+```sh
+rm -rf ~/.config/nvim && mv ~/.config/nvim.bak ~/.config/nvim
+```
+
+A rerun recognises its own config in `~/.config/nvim` and leaves the backup
+alone rather than burying it. Neovim itself is not installed here: an existing
+0.11 or newer is required, which is what `./install-nvim.sh` is for. Plugins come
+from `:Lazy! sync` and the parser list is read out of the config, so neither is
+repeated in the script.
 
 ### Tool config and aliases
 

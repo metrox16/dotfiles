@@ -15,6 +15,10 @@ opt.showmatch = true
 opt.hlsearch = true
 opt.autoindent = true
 
+-- Plain line numbers. LazyVim ships relativenumber on, the old config never had
+-- it. <leader>uL toggles it per session.
+opt.relativenumber = false
+
 -- Never hard-wrap while typing; soft wrap long lines instead. LazyVim ships
 -- wrap=false, the old config kept Neovim's default. <leader>uw toggles it.
 opt.textwidth = 0

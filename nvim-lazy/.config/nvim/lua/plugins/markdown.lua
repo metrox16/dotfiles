@@ -1,4 +1,6 @@
--- Markdown rendering: markview.nvim from the old config, off until :Mdshow.
+-- Markdown rendering: markview.nvim, same as the old config. It renders as soon
+-- as a markdown file is opened and :Mdshow toggles it off and on again.
+--
 -- LazyVim's markdown extra ships render-markdown.nvim, so that one is disabled
 -- to keep a single renderer touching the buffer.
 return {
@@ -8,14 +10,8 @@ return {
     "OXY2DEV/markview.nvim",
     ft = { "markdown", "markdown.mdx" },
     cmd = { "Markview", "Mdshow" },
-    opts = {
-      -- Do not render on attach; :Mdshow turns it on per buffer.
-      preview = {
-        enable = false,
-      },
-    },
-    config = function(_, opts)
-      require("markview").setup(opts)
+    config = function()
+      require("markview").setup()
 
       vim.api.nvim_create_user_command("Mdshow", function()
         vim.cmd("Markview toggle")

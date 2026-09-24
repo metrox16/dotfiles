@@ -106,6 +106,42 @@ return {
     end,
   },
 
+  -- Leaving a tool out of ensure_installed stops Mason from failing on it, but
+  -- the extra that asked for it still registers it. nvim-lint then spawns the
+  -- missing binary on every read, write and insert-leave, and the markdown
+  -- extra's markdownlint-cli2 turns that into an error per keystroke. A linter
+  -- whose command is absent and whose toolchain is missing is dropped; one
+  -- Mason is about to install is kept, since the install finishes on its own.
+  {
+    "mfussenegger/nvim-lint",
+    opts = function(_, opts)
+      local lint = require("lint")
+
+      local function runnable(name)
+        local linter = lint.linters[name]
+        if type(linter) == "function" then
+          linter = linter()
+        end
+
+        local cmd = type(linter) == "table" and linter.cmd or nil
+        if type(cmd) == "function" then
+          local ok, resolved = pcall(cmd)
+          cmd = ok and resolved or nil
+        end
+        if type(cmd) ~= "string" or have(cmd) then
+          return true
+        end
+
+        local needs = tool_needs[name]
+        return needs == nil or available(needs)
+      end
+
+      for ft, linters in pairs(opts.linters_by_ft or {}) do
+        opts.linters_by_ft[ft] = vim.tbl_filter(runnable, linters)
+      end
+    end,
+  },
+
   {
     "neovim/nvim-lspconfig",
     opts = function(_, opts)
